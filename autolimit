@@ -1,0 +1,55 @@
+#!/bin/bash
+
+echo 0 >>/sys/devices/system/cpu/intel_pstate/no_turbo
+
+stepSize=100000
+
+curMaxTemp() {
+	m=-1000000000
+	for i in /sys/devices/platform/coretemp.*/temp*_input
+	do	j="${i%_input}_max"
+		t="$(cat $i)"
+		mt="$(cat $j)"
+		d=$((t - mt))
+		if ((d > m))
+		then	m="${d}"
+			echo "$(cat "${i%_input}_label"):	$((t/1000))/$((mt/1000))	" >&2
+		fi
+	done
+	echo "$m"
+}
+
+
+changeSpeed() {
+	echo "cpu	max	cur	$(date)"
+	request="$1"
+	for i in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq
+	do 	c="$(cat $i)"
+		maxc="$(cat "${i%scaling_max_freq}cpuinfo_max_freq")"
+		curc="$(cat "${i%scaling_max_freq}cpuinfo_cur_freq")"
+		minc="$(cat "${i%scaling_max_freq}cpuinfo_min_freq")"
+		tc=$((c + (stepSize * request)))
+		cpu="${i##*cpu/}"
+		cpu="${cpu%%/*}"
+		if  (( curc > (c - 1100000) || request < 0 ))
+		then    echo $tc >>$i
+			echo "${cpu}	$(cat "$i")	$(cat "${i%scaling_max_freq}cpuinfo_cur_freq")" >&2
+		else	echo "${cpu} below current max, probably throttling itself." >&2
+		fi
+	done
+}
+
+
+regulate() {
+	cmt=$(curMaxTemp)
+	if (( cmt > 2000 ))
+	then changeSpeed -1
+	fi
+	if (( cmt < 0000 ))
+	then changeSpeed 1
+	fi
+}
+
+while sleep 1
+do	regulate
+done

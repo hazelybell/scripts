@@ -1,0 +1,2 @@
+#!/bin/bash
+ps --no-header -To spid -C "$@"

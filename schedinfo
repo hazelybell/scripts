@@ -1,0 +1,2 @@
+#!/bin/bash
+ps -To spid,time,ni,policy,pri,psr,cmd -C "$@"
