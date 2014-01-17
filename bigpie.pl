@@ -28,6 +28,6 @@ chomp $r;
 
 inplace_edit(
     sub {
-      s/$f/$r/gs;
+      s/\Q$f\E/$r/gs;
     }
 );
