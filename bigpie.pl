@@ -12,7 +12,7 @@ use File::Slurp;
 $/ = '';
 
 sub inplace_edit {
-    my ($callback, @files) = @_;
+    my ($callback) = @_;
     return unless ref($callback) eq "CODE";
     local $^I = "";
     while (<>) {
