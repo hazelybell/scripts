@@ -16,7 +16,7 @@ sub type {
 
   my @text = split(/(?<=%)(?=s)/, $text);
 
-  map {shell_quote_best_effort $_;} @text;
+  @text = map {shell_quote_best_effort $_;} @text;
 
   foreach (@text) {
     s/ /%s/g;
