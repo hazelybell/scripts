@@ -1,0 +1,2 @@
+#!/bin/bash
+awk "BEGIN {srand($RANDOM + $RANDOM)} {c = (rand() < (1.0 / FNR))?\$0:c} END { print c }" $*
