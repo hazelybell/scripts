@@ -42,10 +42,10 @@ changeSpeed() {
 
 regulate() {
 	cmt=$(curMaxTemp)
-	if (( cmt > 2000 ))
+	if (( cmt > 0000 ))
 	then changeSpeed -1
 	fi
-	if (( cmt < 0000 ))
+	if (( cmt < -2000 ))
 	then changeSpeed 1
 	fi
 }

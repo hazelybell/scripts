@@ -1,4 +1,4 @@
 #!/bin/bash
-for branch in `git branch -a | grep remotes | grep -v HEAD | grep -v master`; do
-    git branch --track ${branch##*/} $branch
+for branch in `git branch -r | grep -v HEAD`; do
+    git checkout -b ${branch##*/} $branch
 done
