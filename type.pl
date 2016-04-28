@@ -20,7 +20,7 @@ sub type {
 
   foreach (@text) {
     s/ /%s/g;
-    system(qw(adb shell input keyboard text), $_);
+    system(qw(adb shell input text), $_);
   }
   
 }
