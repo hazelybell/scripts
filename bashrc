@@ -17,6 +17,8 @@ fi
 
 shopt -s histverify extglob cdspell cmdhist histappend dirspell
 set -o noclobber
+set -o nounset
+set -o pipefail
 
 HISTFILESIZE=
 HISTSIZE=
@@ -102,7 +104,7 @@ if [[ ! ( -t 0 && -t 1 ) ]]; then
 fi
 
 # Check if we can start screen
-if [[ "$TERM" != screen* ]] && [ "$SSH_CONNECTION" != "" ]; then
+if [[ "$TERM" != screen* ]] && [[ -v SSH_CONNECTION ]]; then
         exec screen -S remote -xRR
 fi
 
@@ -118,7 +120,7 @@ case $TERM in
         TITLE_FANCY='\033]0;${TITLE_COMMAND} (${USER}@${HOSTNAME%%.*}#${TITLE_DEV} ${PWD/#$HOME/~})\007'
         TITLE_TRAP=TITLE_MAKE
         PS1_TITLE='\[\033]0; \u@\h#\l \W\007\]'
-        if [[ -z "$COLORTERM" ]]; then # assume this is really a color terminal
+        if [[ ! -v COLORTERM ]]; then # assume this is really a color terminal
           COLORTERM="$TERM"
         fi
         ;;
@@ -126,14 +128,14 @@ case $TERM in
         TITLE_FANCY='\033k${TITLE_COMMAND} (${PWD/#$HOME/~})\033\\'
         TITLE_TRAP=TITLE_MAKE
         PS1_TITLE='\[\033k\W\033\\\]\[\033_\u@\h#\l\033\\\]'
-        if [[ -z "$COLORTERM" ]]; then # assume this is really a color terminal
+        if [[ ! -v COLORTERM ]]; then # assume this is really a color terminal
           COLORTERM="$TERM"
         fi
         ;;
     linux)
         # Don't set TITLE_TRAP
         PS1_TITLE=''
-        if [[ -z "$COLORTERM" ]]; then # really a color terminal but doesn't set COLORTERM
+        if [[ ! -v COLORTERM ]]; then # really a color terminal but doesn't set COLORTERM
           COLORTERM="$TERM"
         fi
         ;;
@@ -145,7 +147,7 @@ esac
 
 # Determine if we have a color terminal not found above
 # Normally we could just do this but no one's ssh server is setup to AcceptEnv COLORTERM
-if [[ -z "${COLORTERM}" ]]; then
+if [[ ! -v COLORTERM ]]; then
     PROMPT_COMMAND=PS1_EXTRA
     export LESS="aMQSj.5"
 else
