@@ -1,0 +1,2 @@
+#!/bin/sh
+~/scripts/record.sh >/dev/null 2>/dev/null </dev/null &

@@ -221,3 +221,9 @@ fi
 if [[ -e ~/scripts/bashrc-local ]]; then
   source ~/scripts/bashrc-local
 fi
+
+
+# tabtab source for yo package
+# uninstall by removing these lines or running `tabtab uninstall yo`
+[ -f /home/wz/partycrasher/partycrasher/ngapp/node_modules/yo/node_modules/tabtab/.completions/yo.bash ] && . /home/wz/partycrasher/partycrasher/ngapp/node_modules/yo/node_modules/tabtab/.completions/yo.bash
+
