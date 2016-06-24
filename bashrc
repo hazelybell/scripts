@@ -210,7 +210,7 @@ TITLE_MAKE() {
 }
 
 # Dynamic title setting adapted from http://www.davidpashley.com/articles/xterm-titles-with-bash.html
-if [[ -n "$TITLE_TRAP" ]] ; then
+if [[ -n ${TITLE_TRAP+x} ]] ; then
   trap "$TITLE_TRAP" DEBUG
 fi
 
