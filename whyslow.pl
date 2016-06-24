@@ -239,14 +239,14 @@ misc();
 pstate();
 ia32_therm();
 ia32_clockmod();
-core_perf_limit_reasons();
+# core_perf_limit_reasons();
 rapl();
 
 if ($clear) {
     `wrmsr -a 0x19c 0x0`;
     `wrmsr 0x1b1 0x0`;
-    `wrmsr -a 0x690 0x0`;
-    `wrmsr 0x6b0 0x0`;
-    `wrmsr 0x6b1 0x0`;
+#     `wrmsr -a 0x690 0x0`;
+#     `wrmsr 0x6b0 0x0`;
+#     `wrmsr 0x6b1 0x0`;
 }
 
