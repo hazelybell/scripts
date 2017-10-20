@@ -1,0 +1,7 @@
+[Unit]
+Description=Backup Scripts Slice
+Before=slices.target
+
+[Slice]
+MemoryAccounting=true
+MemoryLimit=1024M
