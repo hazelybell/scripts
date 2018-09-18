@@ -4,37 +4,53 @@ echo 0 >>/sys/devices/system/cpu/intel_pstate/no_turbo
 
 stepSize=100000
 
+tt="$(($1*1000))" # target temp in mC
+#echo "Target temp $((tt/1000))"
+
 curMaxTemp() {
-	m=-1000000000
-	for i in /sys/devices/platform/coretemp.*/temp*_input
-	do	j="${i%_input}_max"
-		t="$(cat $i)"
-		mt="$(cat $j)"
-		d=$((t - mt))
-		if ((d > m))
-		then	m="${d}"
-			echo "$(cat "${i%_input}_label"):	$((t/1000))/$((mt/1000))	" >&2
+	m=-1000000000 # max overtemp
+	for temp_i in /sys/devices/platform/coretemp.*/hwmon/hwmon*/temp*_input
+	do	
+		max_i="${temp_i%_input}_max" # path
+		crit_i="${temp_i%_input}_crit" # path
+		t="$(cat $temp_i)" # temp
+		mt="$(cat $max_i)" # so called maximum temp
+		ct="$(cat $crit_i)" # critical temp
+		d=$((t - tt)) # overtemp
+		if ((d > m)) # max() algo
+		then	m="${d}" # update max overtemp
+			echo "$(cat "${temp_i%_input}_label"):	$((t/1000))/$((tt/1000))	" >&2
 		fi
 	done
-	echo "$m"
+	echo "$m" # max(overtemp)
 }
 
 
 changeSpeed() {
 	echo "cpu	max	cur	$(date)"
 	request="$1"
+	max_target_c=0
 	for i in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq
 	do 	c="$(cat $i)"
 		maxc="$(cat "${i%scaling_max_freq}cpuinfo_max_freq")"
-		curc="$(cat "${i%scaling_max_freq}cpuinfo_cur_freq")"
+		curc="$(cat "${i%scaling_max_freq}scaling_cur_freq")"
 		minc="$(cat "${i%scaling_max_freq}cpuinfo_min_freq")"
 		tc=$((c + (stepSize * request)))
+		if ((tc > max_target_c))
+		then max_target_c=$tc
+		fi
+	done
+	for i in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq
+	do 	true
 		cpu="${i##*cpu/}"
 		cpu="${cpu%%/*}"
 		if  (( curc > (c - 1100000) || request < 0 ))
-		then    echo $tc >>$i
-			echo "${cpu}	$(cat "$i")	$(cat "${i%scaling_max_freq}cpuinfo_cur_freq")" >&2
+		then    echo $max_target_c >>$i
+			echo "${cpu}	$(cat "$i")	$(cat "${i%scaling_max_freq}scaling_cur_freq")" >&2
 		else	echo "${cpu} below current max, probably throttling itself." >&2
+			changeSpeed -5
+			sleep 10
+			exec $0 $((tt/1000))
 		fi
 	done
 }
@@ -50,6 +66,8 @@ regulate() {
 	fi
 }
 
-while sleep 1
+while true
 do	regulate
+	sleep 1
+	exec $0 $1
 done

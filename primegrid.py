@@ -82,13 +82,13 @@ def set_gpu_core(gpu_irq, core):
 
 #gpu_core = first_cpu[min(first_cpu.keys())]
 get_topology()
-gpu_irq = get_gpu_irq()
-gpu_thread = get_gpu_hw_thread(gpu_irq)
-gpu_core = threads[gpu_thread]['core']
+#gpu_irq = get_gpu_irq()
+#gpu_thread = get_gpu_hw_thread(gpu_irq)
+#gpu_core = threads[gpu_thread]['core']
 #set_gpu_core(gpu_irq, gpu_core)
-other_cores = [core for core in cores.keys() if core != gpu_core]
-other_cores_threads = [thread for thread in threads.keys() if thread not in cores[gpu_core].keys()]
-other_all_threads = [thread for thread in threads.keys() if thread != gpu_thread]
+#other_cores = [core for core in cores.keys() if core != gpu_core]
+#other_cores_threads = [thread for thread in threads.keys() if thread not in cores[gpu_core].keys()]
+#other_all_threads = [thread for thread in threads.keys() if thread != gpu_thread]
 
 def get_free_core_thread(core):
     return min(cores[core].keys(), key=lambda x: len(cores[core][x]['procs']))
@@ -179,7 +179,7 @@ def go():
 
 go()
 
-call(['taskset', '-p', '-c', str(cores[gpu_core].keys()[0]), str(os.getpid())])
+#call(['taskset', '-p', '-c', str(cores[gpu_core].keys()[0]), str(os.getpid())])
 #latency = open('/dev/cpu_dma_latency', 'wb', buffering=0)
 #latency.write(b'\0\0\0\0')
 #latency.flush()
