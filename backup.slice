@@ -4,4 +4,4 @@ Before=slices.target
 
 [Slice]
 MemoryAccounting=true
-MemoryLimit=1024M
+MemoryLimit=2048M
