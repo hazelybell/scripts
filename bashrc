@@ -17,7 +17,7 @@ fi
 
 shopt -s histverify extglob cdspell cmdhist histappend dirspell
 set -o noclobber
-set -o nounset
+#set -o nounset
 set -o pipefail
 
 HISTFILESIZE=

@@ -103,8 +103,9 @@ def get_free_cores_thread(cores):
 def smartish_thread_load(threadid):
     return len(threads[threadid]['procs']) + get_core_load(threads[threadid]['core'])/1000
 
-def get_free_hw_thread(some_threads):
-    return min(some_threads, key=smartish_thread_load)
+def get_free_hw_thread(some_threads, stagger):
+    threads = sorted(some_threads, key=smartish_thread_load)
+    return threads[stagger]
 
 def assign_process(pid, threadid, count=True):
     if count:
@@ -121,15 +122,15 @@ def assign_thread(pid, threadid, count=True):
 def get_process_threads(pid):
     return list(os.listdir(os.path.join('/proc', str(pid), 'task')))
     
-def distribute_process_threads(pid, hw_threads, count=True):
+def distribute_process_threads(pid, hw_threads, stagger=0, count=True):
     process_threads = get_process_threads(pid)
     if count:
         for pid in process_threads:
-            assign_thread(pid, get_free_hw_thread(hw_threads), count)
+            assign_thread(pid, get_free_hw_thread(hw_threads, stagger), count)
     else:
         for i in range(0, len(process_threads)):
             pid = process_threads[i]
-            hw_thread = hw_threads[i % len(hw_threads)]
+            hw_thread = hw_threads[(i+stagger) % len(hw_threads)]
             assign_thread(pid, hw_thread, count)
 
 
@@ -167,13 +168,14 @@ def go():
         #distribute_process_threads(p, [gpu_thread])
         #call(['taskset', '-a', '-p', '-c', '1,5', str(pid)])
 
-    for p in sorted(cpuprocs):
+    for i in range(0, len(cpuprocs)):
+        p = sorted(cpuprocs)[i]
         #assign_process(p, get_free_cores_thread(other_cores))
         #call(['chrt', '-a', '-i', '-p', '0', str(p)])
         #call(['taskset', '-a', '-p', '-c', ','.join([str(t) for t in other_threads]), str(pid)])
         #call(['taskset', '-a', '-p', '-c', '4,5,6,7', str(pid)])
         #distribute_process_threads(p, other_all_threads)
-        distribute_process_threads(p, threads.keys())
+        distribute_process_threads(p, threads.keys(), i)
         pass
 
 
