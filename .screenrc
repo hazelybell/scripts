@@ -1,0 +1,5 @@
+nonblock on
+hardstatus on
+hardstatus string "%n%?: %t%? %h"
+vbell on
+defutf8 on
