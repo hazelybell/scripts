@@ -1,0 +1,9 @@
+#!/bin/sh
+# Xsetup - run as root before the login dialog appears
+
+xrandr --setprovideroutputsource modesetting NVIDIA-0
+xrandr --auto
+xrandr --output eDP-1-1 --primary --dpi 112
+nvidia-settings -a "GPUGraphicsClockOffsetAllPerformanceLevels=-200"
+nvidia-settings -a "GPUMemoryTransferRateOffsetAllPerformanceLevels=-2000"
+nvidia-smi -pm 1
