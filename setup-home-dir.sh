@@ -8,7 +8,13 @@ fi
 cd "$HOME"
 function lns() {
 	ln --backup=numbered --suffix=.old \
-		--verbose --symbolic "$@"
+		--verbose --symbolic  --relative \
+		--no-target-directory "$@"
+}
+function mvb() {
+	mv --backup=numbered --suffix=.old \
+		--verbose \
+		--no-target-directory "$@"
 }
 
 function replace() {
@@ -19,14 +25,19 @@ function replace() {
 		destination="$2"
 	fi
 	if [[ ! -e $source ]]
-	then echo "$source is missing!"
+	then	echo "$source is missing!"
+		return
 	fi
-	if [[ -e "$destination" ]]
-	then if [[ -h "$destination" ]]
-		then rm -vf "$destination"
-		else lns "$source" "$destination"
+	if [[ -h "$destination" ]]
+	then	if [[ "$destination" -ef "$source" ]]
+		then	rm -f "$destination"
+		fi
+	else 	if [[ -d "$destination" ]]
+		then 	# it is a directory and not a symbolic link
+			mvb "$destination" "$destination".old
 		fi
 	fi
+	lns "$source" "$destination"
 }
 
 replace .inputrc

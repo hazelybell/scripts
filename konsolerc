@@ -8,7 +8,7 @@ CurrentPalette=Forty Colors
 DefaultProfile=Shell.profile
 
 [Favorite Profiles]
-Favorites=IRC.profile,Shell.profile,New Profile.profile,Screen.profile,Big.profile
+Favorites=Bigger.profile,Big.profile,Shell.profile
 
 [KonsoleWindow]
 SaveGeometryOnExit=false
@@ -16,14 +16,14 @@ ShowMenuBarByDefault=false
 
 [MainWindow]
 MenuBar=Disabled
-State=AAAA/wAAAAD9AAAAAAAAAjIAAAFUAAAABAAAAAQAAAAIAAAACPwAAAAA
+State=AAAA/wAAAAD9AAAAAAAAAtIAAAHWAAAABAAAAAQAAAAIAAAACPwAAAAA
 ToolBarsMovable=Disabled
 
 [Notification Messages]
 CloseAllTabs=true
 
 [Profile Shortcuts]
-Ctrl+Shift+M=IRC.profile
+Ctrl+Shift+M[$d]
 
 [TabBar]
 TabBarVisibility=1
