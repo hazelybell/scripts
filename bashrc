@@ -103,6 +103,9 @@ if [[ ! ( -t 0 && -t 1 ) ]]; then
   return
 fi
 
+# Functions only for interactive sessions
+function python() { echo "Which python?" >&2 }
+
 # Check if we can start screen
 if [[ "$TERM" != screen* ]] && [[ -v SSH_CONNECTION ]]; then
         exec screen -S remote -xRR
