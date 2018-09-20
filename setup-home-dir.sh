@@ -1,6 +1,6 @@
 #!/bin/bash
 
-if [[ ! -e ~/scripts/setup.sh ]]
+if [[ ! -e ~/scripts/bashrc ]]
 then	echo "Expected scripts to be in ~/scripts"
 	exit 1
 fi
