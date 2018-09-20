@@ -78,7 +78,6 @@ function own() { sudo chown -Rc ${USER} ${1:-.}; }
 function rot13 () { echo "$@" | tr a-zA-Z n-za-mN-ZA-M; }
 function gril() { grep -rl "$@" .; }
 function grepword() { grep -Hnr "$@" .; }
-function scp() { echo stop using scp; echo rsync -aP "$@"; }
 function sendkey () {
     if [ $# -eq 1 ]; then
         local key=""
@@ -104,7 +103,8 @@ if [[ ! ( -t 0 && -t 1 ) ]]; then
 fi
 
 # Functions only for interactive sessions
-function python() { echo "Which python?" >&2 }
+function scp() { echo stop using scp; echo rsync -aP "$@"; }
+function python() { echo "Which python?" >&2; }
 
 # Check if we can start screen
 if [[ "$TERM" != screen* ]] && [[ -v SSH_CONNECTION ]]; then
