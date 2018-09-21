@@ -1,9 +1,16 @@
 #!/bin/sh
 # Xsetup - run as root before the login dialog appears
 
-xrandr --setprovideroutputsource modesetting NVIDIA-0
-xrandr --auto
-xrandr --output eDP-1-1 --primary --dpi 112
-nvidia-settings -a "GPUGraphicsClockOffsetAllPerformanceLevels=-200"
-nvidia-settings -a "GPUMemoryTransferRateOffsetAllPerformanceLevels=-2000"
-nvidia-smi -pm 1
+# TODO: Detect and enable PRIME when using modesetting driver for nVidia
+
+if ( xrandr --listproviders | grep -q NVIDIA )
+then	if ( xrandr --listproviders | grep -q modesetting )
+	then 	# the system is PRIME'd
+		xrandr --setprovideroutputsource modesetting NVIDIA-0
+		xrandr --auto
+		xrandr --output eDP-1-1 --primary --dpi 180
+	fi
+	nvidia-settings -a "GPUGraphicsClockOffsetAllPerformanceLevels=-200"
+	nvidia-settings -a "GPUMemoryTransferRateOffsetAllPerformanceLevels=-2000"
+	nvidia-smi -pm 1
+fi

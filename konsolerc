@@ -8,21 +8,22 @@ CurrentPalette=Forty Colors
 DefaultProfile=Shell.profile
 
 [Favorite Profiles]
-Favorites=Shell.profile,Bigger.profile,Big.profile
+Favorites=Bigger.profile,Big.profile,Shell.profile
 
 [KonsoleWindow]
 SaveGeometryOnExit=false
 ShowMenuBarByDefault=false
 
 [MainWindow]
-MenuBar=Enabled
-State=AAAA/wAAAAD9AAAAAAAAAoIAAAGdAAAABAAAAAQAAAAIAAAACPwAAAAA
+MenuBar=Disabled
+State=AAAA/wAAAAD9AAAAAAAAAoIAAAG8AAAABAAAAAQAAAAIAAAACPwAAAAA
 ToolBarsMovable=Disabled
 
 [Notification Messages]
 CloseAllTabs=true
 
 [Profile Shortcuts]
+CapsLock[$d]
 Ctrl+Shift+M[$d]
 
 [TabBar]

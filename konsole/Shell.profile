@@ -1,6 +1,6 @@
 [Appearance]
 BoldIntense=false
-ColorScheme=Easy B
+ColorScheme=Desaturated B
 Font=DejaVu Sans Mono,9,-1,5,50,0,0,0,0,0
 
 [General]
@@ -12,7 +12,7 @@ RemoteTabTitleFormat=%w
 SaveGeometryOnExit=false
 ShowMenuBar=false
 TabBarMode=1
-TerminalRows=24
+TerminalRows=22
 
 [Scrolling]
 HistoryMode=1
