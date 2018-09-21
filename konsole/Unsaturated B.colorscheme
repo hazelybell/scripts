@@ -17,58 +17,58 @@ Color=0,0,0
 Color=85,85,85
 
 [Color1]
-Color=255,0,0
+Color=255,128,128
 
 [Color1Faint]
 Color=255,0,0
 
 [Color1Intense]
-Color=255,0,127
+Color=255,128,192
 
 [Color2]
-Color=0,255,0
+Color=128,255,128
 
 [Color2Faint]
 Color=0,255,0
 
 [Color2Intense]
-Color=127,255,0
+Color=192,255,128
 
 [Color3]
-Color=255,127,0
+Color=255,190,128
 
 [Color3Faint]
 Color=255,128,0
 
 [Color3Intense]
-Color=255,255,0
+Color=255,255,128
 
 [Color4]
-Color=0,0,255
+Color=128,128,255
 
 [Color4Faint]
 Color=0,0,255
 
 [Color4Intense]
-Color=0,127,255
+Color=128,192,255
 
 [Color5]
-Color=128,0,255
+Color=192,128,255
 
 [Color5Faint]
 Color=128,0,255
 
 [Color5Intense]
-Color=255,0,255
+Color=255,128,255
 
 [Color6]
-Color=0,255,127
+Color=128,255,190
 
 [Color6Faint]
 Color=0,255,127
 
 [Color6Intense]
-Color=0,255,255
+Color=128,255,255
 
 [Color7]
 Color=170,170,170
@@ -90,6 +90,6 @@ Color=255,255,255
 
 [General]
 Blur=false
-Description=Saturated B
+Description=Unsaturated B
 Opacity=1
 Wallpaper=

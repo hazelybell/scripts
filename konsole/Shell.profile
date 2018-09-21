@@ -1,6 +1,6 @@
 [Appearance]
 BoldIntense=false
-ColorScheme=Saturated B
+ColorScheme=Easy B
 Font=DejaVu Sans Mono,9,-1,5,50,0,0,0,0,0
 
 [General]
