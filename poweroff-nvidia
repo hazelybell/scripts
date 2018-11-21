@@ -1,0 +1,68 @@
+#!/bin/sh
+# should run with dash, /usr/lib/klibc/bin/sh.shared, and busybox sh
+
+PREREQS=""
+
+prereqs() { echo "$PREREQS"; }
+
+case "$1" in
+    prereqs)
+    prereqs
+    exit 0
+    ;;
+esac
+
+devices=/sys/bus/pci/devices/
+for d in $devices*
+do	if [ -f $d/boot_vga ] \
+		&& [ "$(cat $d/boot_vga)" = "0" ] \
+		&& [ "$(cat $d/vendor)" = "0x10de" ]
+	then # gotcha!
+		nvidia=$d
+	fi
+done
+
+if [ -z "$nvidia" ]
+then	echo "Didn't find an nVidia chip"
+	exit 1
+fi
+
+nvpath=${nvidia#$devices}
+
+bye() {
+	d="$devices$1"
+	echo "Attempting to set $1 to D3 powerdown..."
+	setpci -v -s $1 60+4.B=03:03 \
+		&& echo "Done." \
+		|| echo "Failed."
+#	echo "Attempting to remove $d..."
+#	echo 1 >>$d/remove \
+#		&& echo "Removed." \
+#		|| echo "Failed."
+}
+
+for d in $devices*
+do	if [ -d $d ] && [ -d $d/$nvpath ]
+	then bridge=$d
+	fi
+done
+
+bye "$nvpath"
+
+exit 0 # don't shut down the bridge. it's too dangerous
+
+if [ -z "$bridge" ]
+then	echo "Didn't find the PCI port/slot connected to the nVidia chip?"
+	exit 2
+fi
+
+bridgepath=${bridge#$devices}
+
+for d in $bridge/0*
+do	if [ "$(cat $d/vendor)" != "0x10de"  ]
+	then	echo "PCI port/slot $bridge has non-nvidia things on it o_O"
+		exit 3
+	fi
+done
+
+bye "$bridgepath"

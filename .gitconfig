@@ -1,0 +1,12 @@
+[color]
+	ui = auto
+[user]
+	name = Hazel Victoria Campbell
+	email = git@orezpraw.com
+[push]
+	default = simple
+[merge]
+	tool = meld
+[mergetool "kompare"]
+	cmd = $REMOTE
+	trustExitCode = false

@@ -12,5 +12,6 @@ then	if ( xrandr --listproviders | grep -q modesetting )
 	fi
 	nvidia-settings -a "GPUGraphicsClockOffsetAllPerformanceLevels=-200"
 	nvidia-settings -a "GPUMemoryTransferRateOffsetAllPerformanceLevels=-2000"
+	nvidia-persistenced --verbose --persistence-mode
 	nvidia-smi -pm 1
 fi

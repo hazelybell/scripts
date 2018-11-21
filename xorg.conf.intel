@@ -1,0 +1,20 @@
+Section "Files"
+    ModulePath "/usr/lib/xorg/modules"
+EndSection
+
+Section "ServerLayout"
+	Identifier	"light"
+	Screen		0 "builtin"
+EndSection
+
+Section "Device"
+    Identifier             "integrated"
+    Driver                 "modesetting"
+    BusID                  "PCI:0:2:0"
+    Option "kmsdev"	   "/dev/dri/by-path/pci-0000:00:02.0-card"
+EndSection
+
+Section "Screen"
+	Identifier	"builtin"
+	Device		"integrated"
+EndSection
