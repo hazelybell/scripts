@@ -1,0 +1,18 @@
+#!/bin/sh -e
+
+PREREQS=""
+
+prereqs() { echo "$PREREQS"; }
+
+case "$1" in
+    prereqs)
+    prereqs
+    exit 0
+    ;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+copy_exec /usr/bin/setpci /bin
+copy_exec /usr/bin/pcimodules /bin
+copy_exec /usr/bin/lspci /bin

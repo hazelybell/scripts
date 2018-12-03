@@ -1,0 +1,34 @@
+Section "Files"
+    ModulePath "/usr/lib/nvidia/nvidia,/usr/lib/xorg/modules"
+EndSection
+
+Section "ServerLayout"
+	Identifier	"dualgpu"
+	Screen		0 "external"
+	Inactive	"integrated"
+EndSection
+
+Section "Device"
+    Identifier             "integrated"
+    Driver                 "modesetting"
+    BusID                  "PCI:0:2:0"
+    Option "kmsdev"	   "/dev/dri/by-path/pci-0000:00:02.0-card"
+EndSection
+
+Section "Screen"
+	Identifier	"builtin"
+	Device		"integrated"
+EndSection
+
+Section "Device"
+    Identifier             "discrete"
+    Driver                 "nvidia"
+    BusID                  "PCI:1:0:0"
+    Option	"AllowEmptyInitialConfiguration" "true"
+EndSection
+
+Section "Screen"
+	Identifier	"external"
+	Device		"discrete"
+EndSection
+

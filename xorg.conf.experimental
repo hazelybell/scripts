@@ -1,0 +1,75 @@
+Section "Files"
+    ModulePath "/usr/lib/xorg/modules,/usr/lib/nvidia/nvidia"
+EndSection
+
+Section "ServerLayout"
+	Identifier	"prime"
+	Screen		0 "external"
+	Inactive	"integrated"
+EndSection
+
+Section "ServerLayout"
+	Identifier	"light"
+	Screen		0 "builtin"
+EndSection
+
+Section "ServerLayout"
+	Identifier	"xin"
+	Screen		0 "builtin"
+	Screen		1 "kmsexternal" Above "builtin"
+	Option		"Xinerama" "On"
+EndSection
+
+Section "ServerLayout"
+	Identifier	"kmsall"
+	Screen		0 "multiscreen"
+EndSection
+
+Section "Device"
+    Identifier             "integrated"
+    Driver                 "modesetting"
+    BusID                  "PCI:0:2:0"
+    Option "kmsdev"	   "/dev/dri/by-path/pci-0000:00:02.0-card"
+EndSection
+
+Section "Screen"
+	Identifier	"builtin"
+	Device		"integrated"
+EndSection
+
+Section "Device"
+    Identifier             "discrete"
+    Driver                 "nvidia"
+    BusID                  "PCI:1:0:0"
+    Option	"AllowEmptyInitialConfiguration" "true"
+    #Option  "RegistryDwords"   "PowerMizerEnable=0x1; PerfLevelSrc=0x2222; PowerMizerDefault=0x3; PowerMizerDefaultAC=0x3; PowerMizerLevel=0x"
+    Option "Coolbits" "255"
+EndSection
+
+Section "Screen"
+	Identifier	"external"
+	Device		"discrete"
+EndSection
+
+Section "Device"
+	Identifier	"multidevice"
+	Driver		"modesetting"
+    BusID                  "PCI:0:2:0"
+    BusID                  "PCI:1:0:0"
+EndSection
+
+Section "Screen"
+	Identifier	"multiscreen"
+	Device		"multidevice"
+EndSection
+
+Section "Device"
+	Identifier	"kmsnvidia"
+	Driver		"modesetting"
+    BusID                  "PCI:1:0:0"
+EndSection
+
+Section "Screen"
+	Identifier	"kmsexternal"
+	Device		"kmsnvidia"
+EndSection

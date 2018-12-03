@@ -1,0 +1,5 @@
+xrandr --output eDP-1-1 --primary --dpi 180
+nvidia-settings -a "GPUGraphicsClockOffsetAllPerformanceLevels=-200"
+nvidia-settings -a "GPUMemoryTransferRateOffsetAllPerformanceLevels=-2000"
+nvidia-smi -pm 1
+
