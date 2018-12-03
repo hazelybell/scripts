@@ -4,13 +4,13 @@ echo 0 >>/sys/devices/system/cpu/intel_pstate/no_turbo
 
 stepSize=100000
 
-tt="$(($1*1000))" # target temp in mC
+tt="$(($1 * 1000))" # target temp in mC
 #echo "Target temp $((tt/1000))"
 
 curMaxTemp() {
 	m=-1000000000 # max overtemp
 	for temp_i in /sys/devices/platform/coretemp.*/hwmon/hwmon*/temp*_input
-	do	
+	do
 		max_i="${temp_i%_input}_max" # path
 		crit_i="${temp_i%_input}_crit" # path
 		t="$(cat $temp_i)" # temp
