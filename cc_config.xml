@@ -1,0 +1,24 @@
+<!--
+This is a minimal configuration file cc_config.xml of the BOINC core client.
+For a complete list of all available options and logging flags and their
+meaning see: https://boinc.berkeley.edu/wiki/client_configuration
+-->
+<cc_config>
+  <log_flags>
+    <task>1</task>
+    <file_xfer>1</file_xfer>
+    <sched_ops>1</sched_ops>
+    <cpu_sched>1</cpu_sched>
+    <cpu_sched_debug>1</cpu_sched_debug>
+    <priority_debug>1</priority_debug>
+    <sched_op_debug>1</sched_op_debug>
+    <task_debug>1</task_debug>
+  </log_flags>
+  <options>
+    <allow_remote_gui_rpc>1</allow_remote_gui_rpc>
+    <!--<fetch_minimal_work>1</fetch_minimal_work>-->
+    <process_priority_special>5</process_priority_special>
+    <process_priority>2</process_priority>
+    <lower_client_priority>0</lower_client_priority>
+  </options>
+</cc_config>
