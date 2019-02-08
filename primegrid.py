@@ -359,6 +359,9 @@ class Job:
 
 class GPUJob(Job):
     kind = 'gpu'
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.weight = 0.2
     
     def assign(self, processor, ahs):
         if ahs:
@@ -384,6 +387,7 @@ class GPUJob(Job):
     distribute = assign_whole_process
     
     def undistribute(self):
+        DEBUG("GPU job " + self.pid + " finished")
         for p in self.processors:
             p.unassign(self.pid)
 
@@ -406,6 +410,7 @@ class CPUJob(Job):
     distribute = distribute_process_threads
     
     def undistribute(self):
+        DEBUG("CPU job " + self.pid + " finished")
         for t in self.threads:
             t.unassign()
 
@@ -447,7 +452,7 @@ class Schedule:
             if pid in known:
                 alive[pid] = known[pid]
             else:
-                DEBUG("NEW %s PROC: %d" % (kind, pid))
+                DEBUG("NEW %s PROC: %d" % (kind.__name__, pid))
                 new.add(kind(pid, self))
         
         for i in os.listdir(PROC):
