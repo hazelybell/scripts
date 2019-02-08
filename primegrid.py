@@ -4,8 +4,8 @@ import os
 import re
 import json
 import sys
-from subprocess import call
-from time import sleep
+import subprocess
+import time
 import argparse
 import math
 
@@ -28,7 +28,11 @@ gputasks = [
     re.compile(r'primegrid_genefer'),
     ]
 
-PROC = "/PROC"
+PROC = "/proc"
+
+def call(*args, **kwargs):
+    DEBUG(" ".join([a for arg in args for a in arg]))
+    subprocess.call(*args, **kwargs)
 
 def slurp(*args):
     path = os.path.join(*args)
@@ -127,12 +131,19 @@ class NSet:
             w = i.weight()
             if w < (minweight * lb):
                 minprocs = [i]
+                minweight = w
             elif w > (minweight * lb) and (w < minweight * ub):
                 minprocs.append(i)
         minprocs = sorted(minprocs, key=lambda x: x.n)
         i = stagger[0] % len(minprocs)
         stagger[0] = stagger[0] // len(minprocs)
         return minprocs[i]
+    
+    def __iter__(self):
+        return self.s.__iter__()
+    
+    def __len__(self):
+        return self.s.__len__()
 
 class ProcessorSet(NSet):
     def without_core(self, core):
@@ -185,14 +196,16 @@ class Processor(Numbered):
     
     def siblings(self):
         assert self in self.core.processors
-        return {p for p in self.core.processors
+        r = {p for p in self.core.processors
                     if p is not self }
+        return r
     
     def weight(self):
         return sum(self.threads.values())
     
-    def assign(self, tid):
+    def assign(self, tid, weight):
         self.threads[tid] = weight
+        #DEBUG("Processor " + str(self.n) + " weight " + str(self.weight()))
     
     def unassign(self, tid):
         del self.threads[tid]
@@ -260,7 +273,7 @@ class Topology:
         self.processors_by_number[n] = processor
     
     def get_freeest_processor(self):
-        return self.cores.get_minimum_core_processor()
+        return self.cores.minimum_core_processor()
     
 class GPU:
     irqs = "/proc/irq"
@@ -308,7 +321,7 @@ class Thread:
     
     def assign(self, processor, ahs):
         if ahs:
-            self.processors = processor.siblings()
+            self.processors = processor.core.processors
         else:
             self.processors = {processor}
         for p in self.processors:
@@ -318,11 +331,11 @@ class Thread:
     def affine(self):
         procs = ','.join([str(p.n) for p in self.processors])
         taskset = ['taskset', '-p', '-c'] 
-        call(taskset + [procs, str(tid)])
+        call(taskset + [procs, str(self.tid)])
     
     def unassign(self):
         for p in self.processors:
-            p.unassign(self.tid)
+             p.unassign(self.tid)
 
 class Job:
     kind = None
@@ -364,7 +377,7 @@ class GPUJob(Job):
             call(['chrt', '-a', '-f', '-p', '1', str(self.pid)])
     
     def assign_whole_process(self, cores, stagger):
-        p = cores.get_minimum_core_processor(stagger)
+        p = cores.minimum_core_processor(stagger)
         ahs = self.schedule.options.allow_hyperthread_swapping
         self.assign(p, ahs)
     
@@ -379,15 +392,14 @@ class CPUJob(Job):
     
     def spread_process_threads(self, cores, stagger):
         ahs = self.schedule.options.allow_hyperthread_swapping
-        topology = self.schedule.topology
         for t in self.threads:
-            p = cores.get_minimum_core_processor(stagger)
+            p = cores.minimum_core_processor(stagger)
             t.assign(p, ahs)
     
     def distribute_process_threads(self, cores, stagger):
         layout = self.schedule.options.layout
         if layout == 'spread':
-            self.spread_process_threads(cores)
+            self.spread_process_threads(cores, stagger)
         else:
             raise NotImplemented("Layout not implemented")
     
@@ -443,7 +455,7 @@ class Schedule:
             if m is not None:
                 pid = int(i)
                 try:
-                    cmd = slurp(PROC, i, 'cmdline').split('\0')
+                    cmd = (slurp(PROC, i, 'cmdline').split('\0'))[0]
                 except IOError as e:
                     continue
                 if matches_one_of(cmd, gputasks):
@@ -453,8 +465,8 @@ class Schedule:
                 else:
                     pass
         self.alive = set(alive.values())
-        self.dead = self.jobs.difference(alive)
-        self.jobs = alive.union(new)
+        self.dead = self.jobs.difference(self.alive)
+        self.jobs = self.alive.union(new)
         self.new = new
     
     def distribute(self, cores):
@@ -463,12 +475,13 @@ class Schedule:
         for j in self.dead:
             j.undistribute()
         
+        self.dead = set()
+        
         for j in self.new:
             j.distribute(cores, [stagger])
             stagger = stagger + 1
         
         self.alive = self.jobs
-        self.dead = set()
         self.new = set()
         
 class Gridder:
@@ -480,7 +493,7 @@ class Gridder:
     def watch(self):
         while True:
             self.tick()
-            time.sleep(options.interval)
+            time.sleep(self.options.interval)
             DEBUG("-------")
     
     def tick(self):
@@ -488,7 +501,7 @@ class Gridder:
         self.schedule.distribute(self.topology.cores)
         
     def run(self):
-        if options.zero_latency is not None:
+        if self.options.zero_latency:
             latency = open('/dev/cpu_dma_latency', 'wb', buffering=0)
             latency.write(b'\0\0\0\0')
             latency.flush()
@@ -518,11 +531,11 @@ def main():
                         )
     parser.add_argument("--disallow-hyperthread-swapping",
                         help="don't allow threads to jump between processors on the same core",
-                        action='store_false',
+                        action='store_true',
                         )
     args = parser.parse_args()
     args.allow_hyperthread_swapping = not args.disallow_hyperthread_swapping
     gridder = Gridder(args)
-    gridder.run
+    gridder.run()
 
 main()
