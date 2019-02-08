@@ -387,7 +387,7 @@ class GPUJob(Job):
     distribute = assign_whole_process
     
     def undistribute(self):
-        DEBUG("GPU job " + self.pid + " finished")
+        DEBUG("GPU job " + str(self.pid) + " finished")
         for p in self.processors:
             p.unassign(self.pid)
 
@@ -400,17 +400,30 @@ class CPUJob(Job):
             p = cores.minimum_core_processor(stagger)
             t.assign(p, ahs)
     
+    def clump_process_threads(self, cores, stagger):
+        ahs = self.schedule.options.allow_hyperthread_swapping
+        while i < len(self.threads):
+            p = cores.minimum_core_processor(stagger)
+            sibs = list(p.core.processors)
+            while j < len(sibs) and i < len(self.threads):
+                t = self.threads[i]
+                t.assign(sibs[j], ahs)
+                j = j + 1
+                i = i + 1
+    
     def distribute_process_threads(self, cores, stagger):
         layout = self.schedule.options.layout
         if layout == 'spread':
             self.spread_process_threads(cores, stagger)
+        elif layout == 'clump':
+            self.clump_process_threads(cores, stagger)
         else:
-            raise NotImplemented("Layout not implemented")
+            raise NotImplemented("Bad layout name")
     
     distribute = distribute_process_threads
     
     def undistribute(self):
-        DEBUG("CPU job " + self.pid + " finished")
+        DEBUG("CPU job " + str(self.pid) + " finished")
         for t in self.threads:
             t.unassign()
 
