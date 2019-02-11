@@ -1,0 +1,28 @@
+#!/bin/bash
+# PUT ME IN /etc/laptop-mode/batt-start and /etc/laptop-mode/batt-stop
+PSTATE=/sys/devices/system/cpu/intel_pstate
+echo "ON_AC: " $ON_AC
+if [ $ON_AC -eq 1 ]
+then	# GO TO AC
+	echo "Full boost!"
+	TURBO_PCT=$(cat $PSTATE/turbo_pct)
+	NO_TURBO_PCT=$(( 100 - TURBO_PCT ))
+	echo 100 >>$PSTATE/max_perf_pct
+	echo $NO_TURBO_PCT >>$PSTATE/min_perf_pct
+	echo 0 >>$PSTATE/no_turbo
+	echo 1 >>$PSTATE/hwp_dynamic_boost
+	for CPUFREQ in /sys/devices/system/cpu/cpu*/cpufreq
+	do	echo performance >>$CPUFREQ/scaling_governor
+		echo performance >>$CPUFREQ/energy_performance_preference
+	done
+else	# GO TO BATTERY
+	echo "No boost :("
+	echo 100 >>$PSTATE/max_perf_pct
+	echo 0 >>$PSTATE/min_perf_pct
+	echo 1 >>$PSTATE/no_turbo
+	echo 0 >>$PSTATE/hwp_dynamic_boost
+	for CPUFREQ in /sys/devices/system/cpu/cpu*/cpufreq
+	do	echo powersave >>$CPUFREQ/scaling_governor
+		echo balance_power >>$CPUFREQ/energy_performance_preference
+	done
+fi

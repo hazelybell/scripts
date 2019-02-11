@@ -402,9 +402,11 @@ class CPUJob(Job):
     
     def clump_process_threads(self, cores, stagger):
         ahs = self.schedule.options.allow_hyperthread_swapping
+        i = 0
         while i < len(self.threads):
             p = cores.minimum_core_processor(stagger)
             sibs = list(p.core.processors)
+            j = 0
             while j < len(sibs) and i < len(self.threads):
                 t = self.threads[i]
                 t.assign(sibs[j], ahs)
@@ -527,11 +529,14 @@ class Gridder:
 
 def main():
     description = "Manage CPU affinities for primegrid."
-    parser = argparse.ArgumentParser(description=description)
+    epilog = ("Clump layout should be chosen for most CPUs. Spread layout is "
+        "better on low-core-count CPUs with Hyperthreading when the system "
+        "has intermittent load from foreground processes (X11, etc.). ")
+    parser = argparse.ArgumentParser(description=description, epilog=epilog)
     parser.add_argument("--layout",
                         help="how to distribute process threads among cores. "
                         "Can be one of spread or clump. It's not recommended to use spread.",
-                        default='spread',
+                        default='clump',
                         )
     parser.add_argument("--interval", 
                         type=int,
