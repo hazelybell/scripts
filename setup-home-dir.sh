@@ -44,5 +44,6 @@ replace .inputrc
 replace .toprc
 replace .screenrc
 replace .bashrc
+replace .gitconfig
 replace konsolerc .config/konsolerc
 replace konsole .local/share/konsole
