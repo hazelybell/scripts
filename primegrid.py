@@ -831,7 +831,7 @@ class LlrMarker:
             processors = cores * hyperthreading
             for threads in range(1, processors+1):
                 processes = processors // threads
-                if lps % threads == 0:
+                if processors % threads == 0:
                     self.add_layouts(threads, processes)
         if lps >= 2:
             self.add_layouts(lps-1, 1)
