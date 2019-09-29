@@ -803,7 +803,7 @@ class LlrMarker:
         layouts = []
         if threads > cores:
             layouts = ['free']
-        elif threads == cores:
+        elif threads * processes == cores:
             layouts = ['spread', 'free']
         elif processes >= cores:
             layouts = ['spread', 'free']
