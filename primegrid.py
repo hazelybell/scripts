@@ -715,7 +715,7 @@ class LlrMark:
         #DEBUG("Average time per task: {:.0f}".format(avg))
         rate = len(self.tasks)/avg # tasks per second
         tpd = rate * 60 * 60 * 24
-        #DEBUG("Tasks per day: {:.2f}".format(tpd))
+        #DEBUG("Tasks/day: {:.2f}".format(tpd))
         self.tpd = tpd
         self.maybe_done()
 
@@ -779,7 +779,7 @@ class LlrSampler:
     
     def summary(self):
         return (
-            self.desc + " Tasks per day {:.2f}±{:.2f}".format(
+            self.desc + " Tasks/day {:.2f}±{:.2f}".format(
                 self.mean,
                 self.error
                 )
@@ -805,7 +805,7 @@ class LlrMarker:
             layouts = ['free']
         elif threads * processes == cores:
             layouts = ['spread', 'free']
-        elif processes >= cores:
+        elif processes > cores:
             layouts = ['spread', 'free']
         elif threads == 1:
             layouts = ['spread', 'free']
