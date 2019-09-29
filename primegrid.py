@@ -628,8 +628,10 @@ class Llr:
             for i in range(0, len(lines)-1):
                 line = lines[i].strip()
                 if len(line):
-                    if not self.parse(line):
+                    if self.parse(line):
                         DEBUG("LLR stdout: " + line)
+                    else:
+                        WARNING("LLR stdout: " + line)
             self.bufout = lines[len(lines)-1]
     
     async def watch_stderr(self):
@@ -799,11 +801,11 @@ class LlrMarker:
         self.get_exe()
         self.plan()
     
-    def add_layouts(self, threads, processes):
+    def add_layouts(self, threads, processes, no_aff=False):
         total = threads * processes
         cores = len(self.topology.cores)
         layouts = []
-        if threads > cores:
+        if threads > cores or no_aff:
             layouts = ['free']
         elif threads * processes == cores:
             layouts = ['spread', 'free']
@@ -838,7 +840,7 @@ class LlrMarker:
                 if processors % threads == 0:
                     self.add_layouts(threads, processes)
         if lps >= 2:
-            self.add_layouts(lps-1, 1)
+            self.add_layouts(lps-1, 1, no_aff=True)
     
     def scan_files(self, directory):
         files = glob.glob(directory + "/*llr*")
