@@ -353,6 +353,7 @@ class Thread:
         procs = ','.join([str(p.n) for p in self.processors])
         taskset = ['taskset', '-p', '-c'] 
         call(taskset + [procs, str(self.tid)], stdout=subprocess.DEVNULL)
+        #call(taskset + [procs, str(self.tid)])
     
     def unassign(self):
         for p in self.processors:
@@ -706,6 +707,7 @@ class LlrMark:
     
     def tick(self):
         #DEBUG("tick")
+        self.gridder.tick()
         acc = 0
         for task in self.tasks:
             if task.total is None:
@@ -727,7 +729,7 @@ class LlrMark:
             for task in self.tasks:
                 await task.start()
                 things.extend(task.coros())
-            time.sleep(0.1)
+            time.sleep(1)
             self.schedule.options.layout = self.layout
             self.gridder.tick()
             gathered = asyncio.gather(*things)
