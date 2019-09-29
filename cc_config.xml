@@ -20,5 +20,6 @@ meaning see: https://boinc.berkeley.edu/wiki/client_configuration
     <process_priority_special>5</process_priority_special>
     <process_priority>2</process_priority>
     <lower_client_priority>0</lower_client_priority>
+    <start_delay>30</start_delay>
   </options>
 </cc_config>

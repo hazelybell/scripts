@@ -8,6 +8,15 @@ import subprocess
 import time
 import argparse
 import math
+import glob
+import asyncio
+import tempfile
+import shutil
+import signal
+import traceback
+
+import numpy as np
+import scipy.stats
 
 import logging
 logger = logging.getLogger(__name__)
@@ -16,7 +25,7 @@ INFO = logger.info
 WARNING = logger.warning
 ERROR = logger.error
 CRITICAL = logger.critical
-logging.basicConfig(stream=sys.stderr,level=logging.DEBUG)
+logging.basicConfig(stream=sys.stderr,level=logging.INFO)
 
 cputasks = [
     re.compile(r'^primegrid_llr'),
@@ -30,9 +39,17 @@ gputasks = [
 
 PROC = "/proc"
 
+LLR_RE = re.compile('[\n\r\b]+')
+
+original_sigint_handler = signal.getsignal(signal.SIGINT)
+
 def call(*args, **kwargs):
-    DEBUG(" ".join([a for arg in args for a in arg]))
+    #DEBUG(" ".join([a for arg in args for a in arg]))
     subprocess.call(*args, **kwargs)
+
+def acse(*args, **kwargs):
+    #DEBUG(" ".join(args))
+    return asyncio.create_subprocess_exec(*args, **kwargs)
 
 def slurp(*args):
     path = os.path.join(*args)
@@ -61,7 +78,7 @@ class NSet:
         if isinstance(i, set):
             self.s = set(i)
             self.d = {
-                x.n:x for x in s
+                x.n:x for x in i
                 }
         elif isinstance(i, dict):
             self.s = set(i.values())
@@ -319,19 +336,23 @@ class Thread:
         self.weight = weight
         self.processors = None
     
+    def assign_free(self, processors):
+        self.processors = processors
+        for p in self.processors:
+            p.assign(self.tid, self.weight/len(self.processors))
+        self.affine()
+
     def assign(self, processor, ahs):
         if ahs:
             self.processors = processor.core.processors
         else:
             self.processors = {processor}
-        for p in self.processors:
-            p.assign(self.tid, self.weight/len(self.processors))
-        self.affine()
+        self.assign_free(self.processors)
     
     def affine(self):
         procs = ','.join([str(p.n) for p in self.processors])
         taskset = ['taskset', '-p', '-c'] 
-        call(taskset + [procs, str(self.tid)])
+        call(taskset + [procs, str(self.tid)], stdout=subprocess.DEVNULL)
     
     def unassign(self):
         for p in self.processors:
@@ -348,6 +369,7 @@ class Job:
     
     def get_threads(self):
         tids = list(os.listdir(os.path.join(PROC, str(self.pid), 'task')))
+        #DEBUG(repr(tids))
         threads = []
         for i in range(0, len(tids)):
             if i == 0:
@@ -355,6 +377,7 @@ class Job:
             else:
                 weight = 0.9
             threads.append(Thread(self, tids[i], weight))
+        #DEBUG("Threads: " + str(len(threads)))
         return threads
 
 class GPUJob(Job):
@@ -413,19 +436,25 @@ class CPUJob(Job):
                 j = j + 1
                 i = i + 1
     
+    def free_process_threads(self, cores, stagger):
+        for t in self.threads:
+            t.assign_free(cores.processors())
+    
     def distribute_process_threads(self, cores, stagger):
         layout = self.schedule.options.layout
         if layout == 'spread':
             self.spread_process_threads(cores, stagger)
         elif layout == 'clump':
             self.clump_process_threads(cores, stagger)
+        elif layout == 'free':
+            self.free_process_threads(cores, stagger)
         else:
             raise NotImplemented("Bad layout name")
     
     distribute = distribute_process_threads
     
     def undistribute(self):
-        DEBUG("CPU job " + str(self.pid) + " finished")
+        #DEBUG("CPU job " + str(self.pid) + " finished")
         for t in self.threads:
             t.unassign()
 
@@ -467,7 +496,7 @@ class Schedule:
             if pid in known:
                 alive[pid] = known[pid]
             else:
-                DEBUG("NEW %s PROC: %d" % (kind.__name__, pid))
+                #DEBUG("NEW %s PROC: %d" % (kind.__name__, pid))
                 new.add(kind(pid, self))
         
         for i in os.listdir(PROC):
@@ -527,15 +556,370 @@ class Gridder:
             latency.flush()
         self.watch()
 
+BIT = re.compile(r'bit: (\d+) / (\d+).+?Time per bit: ([\d.]+) ms')
+THUSFAR = re.compile(r'bit: (\d+) / (\d+).+?thusfar: ([\d.]+) sec')
+
+class Llr:
+    def __init__(self, threads, candidate, exe):
+        self.threads = threads
+        self.candidate = candidate
+        self.exe = exe
+        self.proc = None
+        self.bufout = ""
+        self.total = None
+        self.secs = None
+    
+    async def start(self):
+        assert self.proc is None
+        self.temp = tempfile.mkdtemp(prefix="benchmark-llr-")
+        assert os.path.isdir(self.temp)
+        self.proc = await acse(
+            self.exe,
+            '-w' + self.temp,
+            '-d',
+            '-q' + self.candidate,
+            '-oThreadsPerTest=' + str(self.threads),
+            '-oCumulativeTiming=1',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=None,
+            )
+        self.started = time.time()
+    
+    def eta(self):
+        self.total = self.tpb * self.bits
+        #DEBUG("Estimated total time: {:.1f}h ({:.0f}s)".format(self.total/3600, self.total))
+    
+    def parse(self, line):
+        m = BIT.search(line)
+        if m:
+            self.bit = int(m.group(1))
+            self.bits = int(m.group(2))
+            self.tpb = float(m.group(3))/1000
+            self.secs = time.time() - self.started
+            self.eta()
+            #DEBUG(str(self.bit/self.bits) + " " + str(self.tpb))
+            return True
+        m = THUSFAR.search(line)
+        if m:
+            self.bit = int(m.group(1))
+            self.bits = int(m.group(2))
+            #self.secs = float(m.group(3))
+            self.secs = time.time() - self.started
+            self.tpb = self.secs / self.bit
+            self.eta()
+            #DEBUG(str(self.bit/self.bits) + " " + str(self.tpb))
+            #DEBUG(str(time.time()-self.started) + " " + str(self.secs))
+            return True
+        if line.startswith("Starting"):
+            return True
+        if line.startswith("Using"):
+            return True
+        if line.startswith("Caught"):
+            return True
+        return False
+    
+    async def watch_stdout(self):
+        while self.proc != "over" and not self.proc.stdout.at_eof():
+            data = await self.proc.stdout.read(100)
+            data = data.decode()
+            lines = LLR_RE.split(data)
+            lines[0] = self.bufout + lines[0]
+            for i in range(0, len(lines)-1):
+                line = lines[i].strip()
+                if len(line):
+                    if not self.parse(line):
+                        DEBUG("LLR stdout: " + line)
+            self.bufout = lines[len(lines)-1]
+    
+    async def watch_stderr(self):
+        while not self.proc.stderr.at_eof():
+            data = await self.proc.stderr.readline()
+            line = data.decode('ascii').rstrip()
+            DEBUG("LLR stderr: " + line)
+    
+    async def wait(self):
+        await self.proc.wait()
+        shutil.rmtree(self.temp)
+        self.proc = "over"
+    
+    def coros(self):
+        return [
+            self.watch_stdout(),
+            #self.watch_stderr(),
+            self.wait()
+            ]
+    
+    def stop(self):
+        self.proc.terminate()
+
+class LlrMark:
+    def __init__(self, threads, processes, marker, layout):
+        self.threads = threads
+        self.processes = processes
+        self.marker = marker
+        self.layout = layout
+        self.gridder = self.marker.gridder
+        self.schedule = self.gridder.schedule
+        self.processors = len(self.gridder.topology.processors)
+        self.tasks = []
+        self.aborting = False
+        for p in range(0, processes):
+            self.tasks.append(Llr(
+                    self.threads,
+                    self.marker.options.benchmark_llr,
+                    self.marker.exe,
+                ))
+        
+    def check_existing(self):
+        self.gridder.tick()
+        if len(self.schedule.new) + len(self.schedule.alive) > 0:
+            ERROR("LLR is still running :(")
+            ERROR("Did you stop BOINC?")
+            sys.exit(1)
+    
+    def catch_sigint(self):
+        def handler(signum, frame):
+            signal.signal(signal.SIGINT, original_sigint_handler)
+            traceback.print_stack(f=frame)
+            ERROR("Caught SIGINT, exiting!")
+            self.stop()
+            self.aborting = True
+        signal.signal(signal.SIGINT, handler)
+    
+    def uncatch_sigint(self):
+        signal.signal(signal.SIGINT, original_sigint_handler)
+        
+    def maybe_done(self):
+        for task in self.tasks:
+            if task.secs is None:
+                return
+            elif task.secs < 60:
+                return
+        self.stop()
+    
+    def desc(self):
+        return "Processors: {:.0f}% Threads: {} Layout: {}".format(
+            self.processes*self.threads*100/self.processors, 
+            self.threads,
+            self.layout
+            )
+    
+    def tick(self):
+        #DEBUG("tick")
+        acc = 0
+        for task in self.tasks:
+            if task.total is None:
+                return
+            acc += task.total
+        avg = acc/len(self.tasks)
+        #DEBUG("Average time per task: {:.0f}".format(avg))
+        rate = len(self.tasks)/avg # tasks per second
+        tpd = rate * 60 * 60 * 24
+        #DEBUG("Tasks per day: {:.2f}".format(tpd))
+        self.tpd = tpd
+        self.maybe_done()
+
+    def run(self):
+        self.check_existing()
+        self.catch_sigint()
+        async def r():
+            things = []
+            for task in self.tasks:
+                await task.start()
+                things.extend(task.coros())
+            time.sleep(0.1)
+            self.schedule.options.layout = self.layout
+            self.gridder.tick()
+            gathered = asyncio.gather(*things)
+            while True:
+                shielded = asyncio.shield(gathered)
+                try:
+                    return await asyncio.wait_for(shielded, timeout=1.0)
+                except asyncio.TimeoutError:
+                    self.tick()
+        asyncio.run(r())
+        self.uncatch_sigint()
+        if self.aborting:
+            ERROR("Aborted.")
+            for task in self.tasks:
+                assert task.proc == "over"
+            exit(1)
+            raise Exception("Unreachable")
+    
+    def stop(self):
+        for task in self.tasks:
+            task.stop()
+
+class LlrSampler:
+    def __init__(self, mark, ci, *argv):
+        self.mark = mark
+        self.argv = argv
+        self.instance = None
+        self.ci = ci
+        self.samples = []
+    
+    def run(self):
+        self.instance = self.mark(*self.argv)
+        self.desc = self.instance.desc()
+        self.instance.run()
+        self.samples.append(self.instance.tpd)
+        a = np.array(self.samples)
+        n = len(a)
+        self.mean = np.mean(a)
+        if n > 1:
+            sem = scipy.stats.sem(a)
+            #DEBUG("sem: " + str(sem))
+            self.error = sem * scipy.stats.t.ppf(
+                (1 + self.ci) / 2,
+                n - 1
+                )
+        else:
+            self.error = float('inf')
+        
+    
+    def summary(self):
+        return (
+            self.desc + " Tasks per day {:.2f}±{:.2f}".format(
+                self.mean,
+                self.error
+                )
+            )
+
+class LlrMarker:
+    def __init__(self, gridder):
+        self.gridder = gridder
+        self.options = gridder.options
+        self.topology = gridder.topology
+        self.ci = self.options.ci
+        self.tests = []
+        self.remaining = set()
+        self.exe = None
+        self.get_exe()
+        self.plan()
+    
+    def add_layouts(self, threads, processes):
+        total = threads * processes
+        cores = len(self.topology.cores)
+        layouts = []
+        if threads > cores:
+            layouts = ['free']
+        elif processes > cores:
+            layouts = ['spread', 'free']
+        elif threads == 1:
+            layouts = ['spread', 'free']
+        else:
+            layouts = ['spread', 'clump', 'free']
+        for layout in layouts:
+            INFO("Will test " + str(processes) + " tasks with "
+                + str(threads) + " threads each in layout " + layout)
+            self.tests.append(LlrSampler(
+                LlrMark,
+                self.ci,
+                threads,
+                processes,
+                self,
+                layout
+                ))
+    
+    def plan(self):
+        lps = len(self.topology.processors)
+        cores = len(self.topology.cores)
+        INFO("Logical processors: " + str(lps))
+        INFO("Cores: " + str(cores))
+        hyper = lps//cores
+        for hyperthreading in range(1, hyper+1):
+            processors = cores * hyperthreading
+            for threads in range(1, processors+1):
+                processes = processors // threads
+                if lps % threads == 0:
+                    self.add_layouts(threads, processes)
+        if lps >= 2:
+            self.add_layouts(lps-1, 1)
+    
+    def scan_files(self, directory):
+        files = glob.glob(directory + "/*llr*")
+        files = [i for i in files if not "wrapper" in i]
+        files = [i for i in files if not ".ini" in i]
+        files = [i for i in files if os.access(i, os.X_OK)]
+        return files
+    
+    def find_exe(self):
+        exes = self.scan_files(".")
+        if len(exes) == 0:
+            exes = self.scan_files(
+                "/var/lib/boinc-client/projects/www.primegrid.com"
+                )
+        if len(exes) > 1:
+            WARNING("Multiple candidate llr binaries: ")
+            for i in exes:
+                WARNING("    " + i)
+            WARNING("Choose one with --llr-executable")
+            exes = sorted(exes, reverse=True)
+        elif len(exes) < 1:
+            ERROR("Can't find llr binary. Choose one with --llr-executable")
+            exit(1)
+        INFO("Using " + exes[0])
+        return exes[0]
+    
+    def get_exe(self):
+        exe = None
+        if self.options.llr_executable:
+            exe = self.options.llr_executable
+        else:
+            exe = self.find_exe()
+        assert os.access(exe, os.X_OK)
+        cputasks.append(re.compile(re.escape(exe)))
+        self.exe = exe
+    
+    def run1(self):
+        INFO("Come back in " + str(len(self.remaining)) + " minutes")
+        for test in self.remaining:
+            test.run()
+            INFO(test.summary())
+    
+    def results_ok(self):
+        asc = sorted(self.tests, key=lambda test: test.mean)
+        ok = True
+        self.remaining = set()
+        INFO("---------- Current results:")
+        for test in asc:
+            INFO(test.summary())
+        INFO("----------")
+        for i in range(0, len(asc)):
+            if i > 0:
+                diff = asc[i].mean - asc[i-1].mean
+                err = asc[i].error + asc[i-1].error
+                #DEBUG(str(diff) + " " + str(err))
+                if err > diff:
+                    ok = False
+                    self.remaining.update({asc[i], asc[i-1]})
+            if i < len(asc)-1:
+                diff = asc[i+1].mean - asc[i].mean
+                err = asc[i+1].error + asc[i].error
+                #DEBUG(str(diff) + " " + str(err))
+                if err > diff:
+                    ok = False
+                    self.remaining.update({asc[i+1], asc[i]})
+        return ok
+    
+    def run(self):
+        done = False
+        self.remaining = set(self.tests)
+        while not done:
+            self.run1()
+            done = self.results_ok()
+        for test in self.tests:
+            print(test.summary())
+
 def main():
-    description = "Manage CPU affinities for primegrid."
+    description = "Manage and benchmark CPU affinities for primegrid."
     epilog = ("Clump layout should be chosen for most CPUs. Spread layout is "
         "better on low-core-count CPUs with Hyperthreading when the system "
         "has intermittent load from foreground processes (X11, etc.). ")
     parser = argparse.ArgumentParser(description=description, epilog=epilog)
     parser.add_argument("--layout",
                         help="how to distribute process threads among cores. "
-                        "Can be one of spread or clump. It's not recommended to use spread.",
+                        "Can be one of spread, clump, or free.",
                         default='clump',
                         )
     parser.add_argument("--interval", 
@@ -549,16 +933,33 @@ def main():
                         action='store_true',
                         )
     parser.add_argument("--realtime-gpu",
-                        help="give GPU processes realtime priority on the CPU",
+                        help="give GPU processes realtime priority on the CPU. Not recommended: can interfere with system"
+                        "function",
                         action='store_true',
                         )
     parser.add_argument("--disallow-hyperthread-swapping",
                         help="don't allow threads to jump between processors on the same core",
                         action='store_true',
                         )
+    parser.add_argument("--benchmark-llr",
+                        type=str,
+                        metavar="CANDIDATE",
+                        help="Benchmark LLR layouts")
+    parser.add_argument("--llr-executable",
+                        type=str,
+                        metavar="PATH",
+                        help="Path to llr executable")
+    parser.add_argument("--ci",
+                        type=float,
+                        metavar="CONFIDENCE_INTERVAL",
+                        default=0.95,
+                        help="Confidence target")
     args = parser.parse_args()
     args.allow_hyperthread_swapping = not args.disallow_hyperthread_swapping
     gridder = Gridder(args)
-    gridder.run()
+    if args.benchmark_llr:
+        LlrMarker(gridder).run()
+    else:
+        gridder.run()
 
 main()
