@@ -450,7 +450,7 @@ class CPUJob(Job):
         elif layout == 'free':
             self.free_process_threads(cores, stagger)
         else:
-            raise NotImplemented("Bad layout name")
+            raise NotImplementedError("Bad layout name: " + layout)
     
     distribute = distribute_process_threads
     
@@ -724,6 +724,7 @@ class LlrMark:
         self.maybe_done()
 
     def run(self):
+        self.schedule.options.layout = self.layout
         self.check_existing()
         self.catch_sigint()
         async def r():
@@ -732,7 +733,6 @@ class LlrMark:
                 await task.start()
                 things.extend(task.coros())
             time.sleep(1)
-            self.schedule.options.layout = self.layout
             self.gridder.tick()
             gathered = asyncio.gather(*things)
             while True:
@@ -805,9 +805,12 @@ class LlrMarker:
         total = threads * processes
         cores = len(self.topology.cores)
         layouts = []
-        if threads > cores or no_aff:
+        #INFO("total: " + str(total) + " cores: " + str(cores))
+        if len(self.options.layout) > 0:
+            layouts = self.options.layout
+        elif threads > cores or no_aff:
             layouts = ['free']
-        elif threads * processes == cores:
+        elif total == cores:
             layouts = ['spread', 'free']
         elif processes > cores:
             layouts = ['spread', 'free']
@@ -827,20 +830,33 @@ class LlrMarker:
                 layout
                 ))
     
-    def plan(self):
+    def add_threads(self, processors, force_threads=None, no_aff=False):
+        if force_threads is not None:
+            threads = [1]
+        elif len(self.options.threads) > 0:
+            threads = self.options.threads
+        else:
+            threads = list(range(1, processors+1))
+        for t in threads:
+            if processors % t == 0:
+                processes = processors // t
+                self.add_layouts(t, processes, no_aff)
+    
+    def add_processors(self):
         lps = len(self.topology.processors)
         cores = len(self.topology.cores)
-        INFO("Logical processors: " + str(lps))
-        INFO("Cores: " + str(cores))
+        processors = self.options.processors
         hyper = lps//cores
-        for hyperthreading in range(1, hyper+1):
-            processors = cores * hyperthreading
-            for threads in range(1, processors+1):
-                processes = processors // threads
-                if processors % threads == 0:
-                    self.add_layouts(threads, processes)
-        if lps >= 2:
-            self.add_layouts(lps-1, 1, no_aff=True)
+        if len(processors) == 0:
+            for hyperthreading in range(1, hyper+1):
+                self.add_threads(cores * hyperthreading)
+            self.add_threads(lps - 1, force_threads=lps-1, no_aff=True)
+        else:
+            for p in processors:
+                self.add_threads(p)
+    
+    def plan(self):
+        self.add_processors()
     
     def scan_files(self, directory):
         files = glob.glob(directory + "/*llr*")
@@ -891,21 +907,31 @@ class LlrMarker:
         for test in asc:
             INFO(test.summary())
         INFO("----------")
-        for i in range(0, len(asc)):
-            if i > 0:
-                diff = asc[i].mean - asc[i-1].mean
-                err = asc[i].error + asc[i-1].error
-                #DEBUG(str(diff) + " " + str(err))
+        if self.options.benchmark_losers:
+            for i in range(0, len(asc)):
+                if i > 0:
+                    diff = asc[i].mean - asc[i-1].mean
+                    err = asc[i].error + asc[i-1].error
+                    #DEBUG(str(diff) + " " + str(err))
+                    if err > diff:
+                        ok = False
+                        self.remaining.update({asc[i], asc[i-1]})
+                if i < len(asc)-1:
+                    diff = asc[i+1].mean - asc[i].mean
+                    err = asc[i+1].error + asc[i].error
+                    #DEBUG(str(diff) + " " + str(err))
+                    if err > diff:
+                        ok = False
+                        self.remaining.update({asc[i+1], asc[i]})
+        else:
+            for t in asc:
+                if t is asc[-1]:
+                    continue
+                diff = asc[-1].mean - t.mean
+                err = t.error + asc[-1].mean
                 if err > diff:
                     ok = False
-                    self.remaining.update({asc[i], asc[i-1]})
-            if i < len(asc)-1:
-                diff = asc[i+1].mean - asc[i].mean
-                err = asc[i+1].error + asc[i].error
-                #DEBUG(str(diff) + " " + str(err))
-                if err > diff:
-                    ok = False
-                    self.remaining.update({asc[i+1], asc[i]})
+                    self.remaining.update({t, asc[-1]})
         return ok
     
     def run(self):
@@ -919,14 +945,13 @@ class LlrMarker:
 
 def main():
     description = "Manage and benchmark CPU affinities for primegrid."
-    epilog = ("Clump layout should be chosen for most CPUs. Spread layout is "
-        "better on low-core-count CPUs with Hyperthreading when the system "
-        "has intermittent load from foreground processes (X11, etc.). ")
+    epilog = ("")
     parser = argparse.ArgumentParser(description=description, epilog=epilog)
     parser.add_argument("--layout",
                         help="how to distribute process threads among cores. "
-                        "Can be one of spread, clump, or free.",
-                        default='clump',
+                        "Can be one of spread, clump, or free. "
+                        "When benchmarking, specifies the layouts to benchmark.",
+                        nargs='*',
                         )
     parser.add_argument("--interval", 
                         type=int,
@@ -960,12 +985,38 @@ def main():
                         metavar="CONFIDENCE_INTERVAL",
                         default=0.95,
                         help="Confidence target")
+    parser.add_argument("--benchmark-losers",
+                        help="Keep benchmarking losing strategies.",
+                        action='store_true',
+                        )
+    parser.add_argument("--processors",
+                        help="Limit benchmark to a certain number of processors. "
+                        "You can specify multiple values.",
+                        metavar="N_CPUS",
+                        type=int,
+                        nargs='*')
+    parser.add_argument("--threads",
+                        help="Limit benchmark to a certain number of threads. "
+                        "You can specify multiple values.",
+                        metavar="N_THEADS",
+                        type=int,
+                        nargs='*')
     args = parser.parse_args()
     args.allow_hyperthread_swapping = not args.disallow_hyperthread_swapping
     gridder = Gridder(args)
     if args.benchmark_llr:
+        if args.processors == None:
+            args.processors = []
+        if args.threads == None:
+            args.threads = []
+        if args.layout == None:
+            args.layout = []
         LlrMarker(gridder).run()
     else:
+        if args.layout == []:
+            args.layout = 'spread'
+        else: 
+            args.layout = args.layout[-1]
         gridder.run()
 
 main()
