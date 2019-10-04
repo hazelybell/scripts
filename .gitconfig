@@ -10,3 +10,7 @@
 [mergetool "kompare"]
 	cmd = $REMOTE
 	trustExitCode = false
+[cinnabar]
+	version-check = 1569165271
+	helper = /home/wz/.mozbuild/git-cinnabar/git-cinnabar-helper
+	fsck = 1569165830
