@@ -2,72 +2,86 @@
 
 echo 0 >>/sys/devices/system/cpu/intel_pstate/no_turbo
 
-stepSize=100000
+Kp=100
+Kdenom=2
+DTnum=1000
+DTdenom=1000
+DTfloat=1 # this must equal Td/Tdenom
+Ti=10
+Td=5
+Tddenom=10
 
 tt="$(($1 * 1000))" # target temp in mC
-#echo "Target temp $((tt/1000))"
+echo "Target temp $tt"
 
-curMaxTemp() {
-	m=-1000000000 # max overtemp
+e() {	# compute the error
+	m=1000000000 # min undertemp
 	for temp_i in /sys/devices/platform/coretemp.*/hwmon/hwmon*/temp*_input
 	do
-		max_i="${temp_i%_input}_max" # path
-		crit_i="${temp_i%_input}_crit" # path
 		t="$(cat $temp_i)" # temp
-		mt="$(cat $max_i)" # so called maximum temp
-		ct="$(cat $crit_i)" # critical temp
-		d=$((t - tt)) # overtemp
-		if ((d > m)) # max() algo
-		then	m="${d}" # update max overtemp
-			echo "$(cat "${temp_i%_input}_label"):	$((t/1000))/$((tt/1000))	" >&2
+		d=$((tt - t)) # undertemp
+		if ((d < m)) # min() algo
+		then	m="${d}" # update min undertemp
+			mi=$temp_i
+			mt=$t
 		fi
 	done
-	echo "$m" # max(overtemp)
+	printf "%13s %2i/%2i" "$(cat "${mi%_input}_label")" "$((mt/1000))" "$((tt/1000))" >&2
+	echo "$m" # min(undertemp)
 }
 
-
+maxc="$(cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq)"
+minc="$(cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_min_freq)"
 changeSpeed() {
-	echo "cpu	max	cur	$(date)"
-	request="$1"
-	max_target_c=0
+	u="$1"
+	c="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq)"
+	tc=$((c + u))
+	if ((tc > maxc))
+	then tc=$maxc
+	fi
+	if ((tc < minc))
+	then tc=$minc
+	fi
 	for i in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq
-	do 	c="$(cat $i)"
-		maxc="$(cat "${i%scaling_max_freq}cpuinfo_max_freq")"
-		curc="$(cat "${i%scaling_max_freq}scaling_cur_freq")"
-		minc="$(cat "${i%scaling_max_freq}cpuinfo_min_freq")"
-		tc=$((c + (stepSize * request)))
-		if ((tc > max_target_c))
-		then max_target_c=$tc
-		fi
+	do	echo "$tc" >>$i
 	done
-	for i in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq
-	do 	true
-		cpu="${i##*cpu/}"
-		cpu="${cpu%%/*}"
-		if  (( curc > (c - 1100000) || request < 0 ))
-		then    echo $max_target_c >>$i
-			echo "${cpu}	$(cat "$i")	$(cat "${i%scaling_max_freq}scaling_cur_freq")" >&2
-		else	echo "${cpu} below current max, probably throttling itself." >&2
-			changeSpeed -5
-			sleep 10
-			exec $0 $((tt/1000))
-		fi
-	done
+	echo " set $tc $( cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq )" >&2
 }
 
-
-regulate() {
-	cmt=$(curMaxTemp)
-	if (( cmt > 0000 ))
-	then changeSpeed -1
-	fi
-	if (( cmt < -2000 ))
-	then changeSpeed 1
+checkTrip() {
+	c="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq)"
+	if (( c < minc ))
+	then echo "CPU TRIPPED ****************************************"
+		for i in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq
+		do	echo "$minc" >>$i
+			prev_e=0
+			int=0
+		done
+		sleep 1
 	fi
 }
+
+prev_e=0
+int=0
+
+Tis=$(( Ti * DTdenom / DTnum ))
+echo Integral time in samples: $Tis
+Tds=$(( Td * DTdenom / DTnum ))
+echo Differential time in samples: $Tds/$Tddenom
 
 while true
-do	regulate
-	sleep 1
-	exec $0 $1
+do	et=$(e)
+	p=$((et))
+	d=$(( ( ( et - prev_e ) * DTdenom ) / DTnum )) # de/dt
+	prev_e=$(( et ))
+	d=$(( $d * Tds / $Tddenom )) # Td de/dt
+#	echo $int $cmt $alpham
+	int=$(( int + et ))
+	i=$(( int * DTnum / DTdenom )) # int(0,t,e dt)
+	i=$(( i / Tis )) # int(0,t,e dt) / Ti
+	u=$(( $Kp * ( $p + $i + $d ) / $Kdenom ))
+	printf ' %8i %8i %8i %8i' $p $i $d $u >&2
+	changeSpeed $u
+	sleep $DTfloat
+	checkTrip
 done
