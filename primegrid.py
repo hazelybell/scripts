@@ -25,7 +25,6 @@ INFO = logger.info
 WARNING = logger.warning
 ERROR = logger.error
 CRITICAL = logger.critical
-logging.basicConfig(stream=sys.stderr,level=logging.INFO)
 
 cputasks = [
     re.compile(r'^primegrid_llr'),
@@ -957,10 +956,15 @@ def main():
                         help="Path to llr executable")
     parser.add_argument("--ci",
                         type=float,
-                        metavar="CONFIDENCE_INTERVAL",
+                        metavar="CONFIDENCE",
                         default=0.95,
                         help="Confidence target")
+    parser.add_argument("--debug", action='store_true')
     args = parser.parse_args()
+    if args.debug:
+        logging.basicConfig(stream=sys.stderr,level=logging.DEBUG)
+    else:
+        logging.basicConfig(stream=sys.stderr,level=logging.INFO)
     args.allow_hyperthread_swapping = not args.disallow_hyperthread_swapping
     gridder = Gridder(args)
     if args.benchmark_llr:
