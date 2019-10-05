@@ -14,6 +14,7 @@ import tempfile
 import shutil
 import signal
 import traceback
+import json
 
 import numpy as np
 import scipy.stats
@@ -54,6 +55,10 @@ def acse(*args, **kwargs):
 def slurp(*args):
     path = os.path.join(*args)
     return open(path, 'r').read().rstrip()
+
+def slurp_output(*args, **kwargs):
+    r = subprocess.run(args, capture_output=True, **kwargs)
+    return r.stdout.decode('ascii')
 
 def dump(thing):
     DEBUG(json.dumps(thing, indent=2, sort_keys=True))
@@ -210,6 +215,13 @@ class Processor(Numbered):
         self.topology = topology
         self.core = core
         self.threads = dict()
+        self.directory = self.topology.base + "/cpu" + str(self.n)
+        self.max_freq_fn = self.directory + '/cpufreq/cpuinfo_max_freq'
+        self.min_freq_fn = self.directory + '/cpufreq/cpuinfo_min_freq'
+        self.lim_freq_fn = self.directory + '/cpufreq/scaling_max_freq'
+        self.cur_freq_fn = self.directory + '/cpufreq/scaling_cur_freq'
+        self.max_freq = self.get_max_freq()
+        self.min_freq = self.get_min_freq()
     
     def siblings(self):
         assert self in self.core.processors
@@ -226,6 +238,25 @@ class Processor(Numbered):
     
     def unassign(self, tid):
         del self.threads[tid]
+    
+    def get_max_freq(self):
+        return int(slurp(self.max_freq_fn))
+
+    def get_min_freq(self):
+        return int(slurp(self.min_freq_fn))
+    
+    def get_lim_freq(self):
+        return int(slurp(self.lim_freq_fn))
+    
+    def set_lim_freq(self, khz):
+        with open(self.lim_freq_fn, 'w') as limit:
+            limit.write(str(khz))
+            limit.flush()
+        if (self.get_lim_freq() != khz):
+            ERROR("Couldn't set frequency limit to " + str(khz))
+
+    def get_cur_freq(self):
+        return int(slurp(self.cur_freq_fn))
 
 class Core:
     def __init__(self, n, topology):
@@ -242,6 +273,26 @@ class Core:
 
     def get_freeest_processor(self):
         return self.processors.minimum()
+    
+    def get_cur_freq(self):
+        fs = [p.get_cur_freq() for p in self.processors]
+        return sum(fs)//len(fs)
+
+    def get_min_freq(self):
+        fs = [p.get_min_freq() for p in self.processors]
+        return max(fs)
+
+    def get_max_freq(self):
+        fs = [p.get_max_freq() for p in self.processors]
+        return min(fs)
+
+    def get_lim_freq(self):
+        fs = [p.get_lim_freq() for p in self.processors]
+        return min(fs)
+    
+    def set_lim_freq(self, khz):
+        for p in self.processors:
+            p.set_lim_freq(khz)
 
 class Topology:
     """400-level maths"""
@@ -533,12 +584,165 @@ class Schedule:
         
         self.alive = self.jobs
         self.new = set()
+
+class NoHardware(Exception):
+    pass
+
+class IntelCoreTemp:
+    def __init__(self):
+        self.files = "/sys/devices/platform/coretemp.*/hwmon/hwmon*/temp*_input"
+        self.get_max_temp()
+    
+    def get_max_temp(self):
+        file_list = glob.glob(self.files)
+        temps = []
+        for f in file_list:
+            t = float(slurp(f)) / 1000.0
+            temps.append(t)
+        if len(temps) < 1:
+            raise NoHardware()
+        return max(temps)
+
+class AcpiTz:
+    def __init__(self):
+        self.files = "/sys/devices/virtual/thermal/thermal_zone*/temp"
+        self.get_max_temp()
+    
+    def get_max_temp(self):
+        file_list = glob.glob(self.files)
+        temps = []
+        for f in file_list:
+            t = float(slurp(f)) / 1000.0
+            temps.append(t)
+        if len(temps) < 1:
+            raise NoHardware()
+        return max(temps)
+
+class Sensors:
+    def __init__(self):
+        self.exe = "/usr/bin/sensors"
+    
+    def get_max_temp(self):
+        temps = []
+        if not os.path.isfile(self.exe):
+            raise NoHardware()
+        read = json.loads(slurp_output(self.exe, '-j'))
+        for device_name, device_data in read.items():
+            for sensor_name, sensor_data in device_data.items():
+                if not isinstance(sensor_data, dict):
+                    continue
+                for k, v in sensor_data.items():
+                    if k.startswith("temp") and k.endswith("input"):
+                        temps.append(v)
+        if len(temps) < 1:
+            raise NoHardware()
+        return max(temps)
+
+class PID:
+    def __init__(self, core, options):
+        self.core = core
+        self.options = options
+        if self.options.target_temp == 'max':
+            self.auto_target = True
+            self.target = 100.0
+        else:
+            self.auto_target = False
+            self.target = int(self.options.target_temp)
+        self.interval = self.options.interval
+        self.i_time = 10.0
+        self.i_samples = self.i_time / self.options.interval
+        self.i = 0.0
+        self.prev_undershoot = 0.0
+        self.scale = 1000.0 # C / Khz
+        
+    def detect_throttle(self):
+        if self.core.weight() >= 1.0:
+            cur_freq = self.core.get_cur_freq()
+            lim_freq = self.core.get_lim_freq()
+            if cur_freq < lim_freq - 100000:
+                INFO("Core {} frequency is {}. It's probably throttling."
+                        .format(self.core.n, cur_freq))
+                return True
+        return False
+    
+    def get_undershoot(self, cur_temp):
+        return self.target - cur_temp
+    
+    def update(self, u):
+        cur_freq = self.core.get_lim_freq()
+        max_freq = self.core.get_max_freq()
+        min_freq = self.core.get_min_freq()
+        new_freq = max(min(cur_freq + u, max_freq), min_freq)
+        self.core.set_lim_freq(new_freq)
+        if self.core.n == 0:
+            INFO("Frequency {:.2f}->{:.2f}Ghz".format(cur_freq/1000000, new_freq/1000000))
+    
+    def regulate(self, cur_temp):
+        undershoot = self.get_undershoot(cur_temp)
+        if self.detect_throttle():
+            undershoot = -5 # force 5C too hot
+            if self.auto_target:
+                self.target -= 1 # reduce target by 1C
+                INFO("Temp target reduced to {}C".format(self.target))
+        p = undershoot
+        diff = undershoot - self.prev_undershoot
+        d = diff #/ self.interval # in degrees/second
+        self.i += undershoot #* self.interval # in degree.seconds
+        u = (p + self.i + d) * self.scale 
+        if self.core.n == 0:
+            INFO("T={}/{} P={} I={} D={} U={:.0f}Mhz".format(cur_temp, self.target, p, self.i, d, u/1000))
+        self.update(u)
+        self.prev_undershoot = undershoot
+    
+
+class Thermo:
+    def pick_sensor(self):
+        try_sensors = [
+            IntelCoreTemp,
+            AcpiTz,
+            Sensors
+            ]
+        self.sensor = None
+        for try_sensor in try_sensors:
+            try:
+                self.sensor = try_sensor()
+            except NoHardware:
+                continue
+            break
+        if self.sensor is None:
+            ERROR("Couldn't find a CPU temperature sensor on your platform. "
+                "Try loading the coretemp kernel module for Intel Core processors. "
+                "You can also try setting up lm-sensors. "
+                )
+            if self.options.target_temp:
+                exit(1)
+    
+    def __init__(self, options, topology):
+        self.options = options
+        self.topology = topology
+        self.pick_sensor()
+        if self.options.target_temp is not None:
+            for core in self.topology.cores:
+                core.pid = PID(core, self.options)
+        else:
+            self.target = None
+        
+    def get_max_temp(self):
+        return self.sensor.get_max_temp()
+    
+    def tick(self):
+        cur_temp = self.get_max_temp()
+        INFO("Current temperature: {:.1f}".format(cur_temp))
+        for core in self.topology.cores:
+            core.pid.regulate(cur_temp)
+        
         
 class Gridder:
     def __init__(self, options):
         self.options = options
         self.topology = Topology()
         self.schedule = Schedule(options)
+        self.thermo = Thermo(options, self.topology)
     
     def watch(self):
         while True:
@@ -549,6 +753,7 @@ class Gridder:
     def tick(self):
         self.schedule.get_new_jobs()
         self.schedule.distribute(self.topology.cores)
+        self.thermo.tick()
         
     def run(self):
         if self.options.zero_latency:
@@ -928,8 +1133,9 @@ class LlrMarker:
                 if t is asc[-1]:
                     continue
                 diff = asc[-1].mean - t.mean
-                err = t.error + asc[-1].mean
+                err = t.error + asc[-1].error
                 if err > diff:
+                    #INFO("diff=" + str(diff) +  " err=" + str(err))
                     ok = False
                     self.remaining.update({t, asc[-1]})
         return ok
@@ -1001,6 +1207,11 @@ def main():
                         metavar="N_THEADS",
                         type=int,
                         nargs='*')
+    parser.add_argument("--target-temp",
+                        help="Manage CPU temperature by restricting CPU Mhz. "
+                        "Specify a temperature in degrees C or 'max'",
+                        metavar="DEGREES_C",
+                        default=None)
     args = parser.parse_args()
     args.allow_hyperthread_swapping = not args.disallow_hyperthread_swapping
     gridder = Gridder(args)
@@ -1020,3 +1231,115 @@ def main():
         gridder.run()
 
 main()
+
+"""
+[size=18]Download[/size]
+
+The latest version is here: [url]https://github.com/hazelybell/scripts/blob/master/primegrid.py[/url]
+
+[size=18]Requirments[/size]
+
+[list]
+* Python 3.7
+* numpy
+* scipy
+* util-linux (with the taskset command)
+[/list]
+
+[size=18]Benchmarking[/size]
+
+To run the benchmark, stop primegrid and call:
+[code]python3.7 primegrid.py --benchmark-llr 'k*2^n+1'[/code]
+For example:
+[code]python3.7 primegrid.py --benchmark-llr '25*2^3962242+1'[/code]
+
+You can get a relevant prime for the project you're interested in from the subproject status page.
+
+This will then run the benchmark with various thread counts, using HT or not, etc. The benchmark will run until it's relatively confident that the best strategy (thread count, HT, affinity) is the best.
+
+Example output:
+[code]INFO:__main__:---------- Current results:
+INFO:__main__:Processors: 88% Threads: 7 Layout: free Tasks/day 48.68±0.60
+INFO:__main__:Processors: 50% Threads: 4 Layout: free Tasks/day 50.39±0.48
+INFO:__main__:Processors: 100% Threads: 1 Layout: free Tasks/day 51.79±0.48
+INFO:__main__:Processors: 100% Threads: 1 Layout: spread Tasks/day 51.98±0.20
+INFO:__main__:Processors: 100% Threads: 8 Layout: free Tasks/day 52.24±0.28
+INFO:__main__:Processors: 50% Threads: 4 Layout: spread Tasks/day 52.90±0.30
+INFO:__main__:Processors: 50% Threads: 2 Layout: free Tasks/day 57.94±0.69
+INFO:__main__:Processors: 50% Threads: 2 Layout: spread Tasks/day 58.86±0.16
+INFO:__main__:Processors: 100% Threads: 4 Layout: spread Tasks/day 61.50±0.59
+INFO:__main__:Processors: 100% Threads: 4 Layout: clump Tasks/day 61.80±0.16
+INFO:__main__:Processors: 100% Threads: 4 Layout: free Tasks/day 61.83±0.21
+INFO:__main__:Processors: 100% Threads: 2 Layout: spread Tasks/day 62.34±1.40
+INFO:__main__:Processors: 100% Threads: 2 Layout: free Tasks/day 64.24±1.65
+INFO:__main__:Processors: 100% Threads: 2 Layout: clump Tasks/day 65.65±1.27
+INFO:__main__:Processors: 50% Threads: 1 Layout: spread Tasks/day 72.00±3.00
+INFO:__main__:Processors: 50% Threads: 1 Layout: free Tasks/day 72.51±2.46
+INFO:__main__:----------[/code]
+
+This indicates that the benchmark has completed a round, and that using 50% of the processors with tasks that have one thread each and letting Linux manage thread affinity was the fastest. It will continue running until it can be confident in it's choice, but you can stop whenever the error bars (the number after the ±) gets small enough for you, or if you're just sick of waiting.
+
+[size=18]Affinity[/size]
+
+The tool currently supports 3 different affinity types:
+
+'free': Let the OS manage affinity itself
+'spread': Spread out the threads of a single task across different cores
+'clump': Put the threads of a single task on the same cores
+
+Example: Consider a 4-core CPU with hyperthreading. For a task with 2 threads, 'spread' will put the two threads on two different cores, and 'free' will put the two threads on the same core. For a task with 4 threads, 'spread' will put one thread on each core, while 'clump' will put all the threads on 2 cores.
+
+[size=18]Managing Affinity[/size]
+
+If you decide that you want to run primegrid with an affinity layout other than 'free' you can run the script with '--layout clump' or '--layout spread' as root. The script will watch for BOINC to start primegrid LLR tasks and manage their affinity using 'taskset'.
+
+[size=18]Advanced Options[/size]
+
+'--processors N' Benchmark only using N processors. This includes logical processors. For example on a 4-core processor with hyperthreading, setting '--processors 4' will only benchmark equivalent to setting 50% of CPUs in BOINC. This will reduce the number of different benchmarks run.
+
+'--threads N' Benchmark only using tasks with N threads. This will reduce the number of different benchmarks to run.
+
+'--layout free|spread|clump' Benchmark only tasks using the specified affinity layout. This will reduce the number of benchmarks to run.
+
+Example for a 6-core hyperthreading processor: '--processors 6 --layout free' will only benchmark 1x6, 2x3, 3x2 and 6x1 tasks x threads without worrying about CPU affinity.  
+
+'--ci .90' Change the confidence interval used to compute the error bars. This will change the number of times the script re-runs benchmarks before it's "confident" in the results.
+
+'--llr-executable path/to/llr' Specify a specific LLR executable.
+
+Even more options: See '--help' output, but be wary, these can have unfortunate effects on your system.
+
+[size=18]Known Bugs[/size]
+
+Systems with complicated topologies are not modelled by the script. That includes systems with multiple CPU sockets, NUMA, and Ryzen 3000-series CPUs. For thread counts strictly more than 2 with hyperthreading or more than 1 without hyperthreading the CPU affinity may be handled poorly. It is better to let the OS manage CPU affinity in these situations. For example, consider the Ryzen 3600X, a 6-core processor with hyperthreading. On this CPU, cores are organized into groups called CCXs, for which communication inside a single CCX is much faster than communication between cores in different CCXs. Thus plans like 4 threads x 3 tasks (100%) may have very poor performance if 'clump' or 'thread' is chosen. I plan supporting these systems better, eventually, if I can get my hands on one.
+
+[size=18]Future features[/size]
+
+[list]
+* Manage CPU temperature (for systems which thermal throttle :x)
+* Model NUMA/multisocket/CCX CPU topologies
+* Manage C-states
+* Manage GPU driver affinity
+* Collect power usage and temperature stats
+[/list]
+
+[size=18]Example Results[/size]
+
+PPS-DIV on a i7-7700K @ 4.7Ghz: use 1 thread, 50% CPUs, 'free' affinity
+PPS-DIV on a i7-3770K @ 4.3Ghz: use 1 thread, 50% CPUs, 'free' affinity
+PPS-DIV on a i7-8750H @ 45W: use 1 thread, 50% CPUs, 'spread' affinity
+PPS-DIV on a i7-4700MQ @ 27W: use 1 thread, 50% CPUs, 'spread' affinity
+PPS-DIV on a Xeon E3-1225 V2 @ stock: use 1 thread, 100% CPUs, 'spread' affinity
+PPS-DIV on a i7-9700K @ 4.8Ghz: use 1 thread, 100% CPUs, 'free' affinity
+SoB on a i7-7700K @ 4.7Ghz: use 4 threads, 50% CPUs, 'free' affinity
+
+[size=18]Conclusions[/size]
+
+From experimenting with this script I've come to the following conclusions. Note that these are only for linux. Other operating systems handle threads very differently.
+[list]
+* Using 1 thread on half the CPUs if hyperthreading or on all the CPUs if no hyperthreading is generally an okay choice. Even for SoB, using 1 thread isn't very much slower than 4 threads.
+* Choosing whether or not to use all logical processors (threads) on a hyperthreading CPU matters.
+* Setting thread affinity can improve performance on some systems.
+* Best thread count changes depending on project. Both [i]k[/i] and [i]n[/i] can have an effect here and they can have different effects. 
+[/list]
+"""
