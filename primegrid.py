@@ -646,48 +646,58 @@ class PID:
             self.target = 100.0
         else:
             self.auto_target = False
-            self.target = int(self.options.target_temp)
+            self.target = float(self.options.target_temp)
         self.interval = self.options.interval
         self.i_time = 10.0
-        self.i_samples = self.i_time / self.options.interval
         self.i = 0.0
         self.prev_undershoot = 0.0
-        self.scale = 1000.0 # C / Khz
+        self.p_scale = 50000.0 # C / Khz
+        self.i_scale = 5000.0
+        self.d_scale = 100000.0
+        self.cur_freq = self.core.get_cur_freq()
         
     def detect_throttle(self):
         if self.core.weight() >= 1.0:
             cur_freq = self.core.get_cur_freq()
             lim_freq = self.core.get_lim_freq()
-            if cur_freq < lim_freq - 100000:
-                INFO("Core {} frequency is {}. It's probably throttling."
-                        .format(self.core.n, cur_freq))
+            if cur_freq < lim_freq - 200000:
+                INFO("Core {} frequency is {:.2f}. It's probably throttling."
+                        .format(self.core.n, cur_freq/1000000))
                 return True
         return False
+    
+    def read(self):
+        self.cur_freq = self.core.get_cur_freq()
     
     def get_undershoot(self, cur_temp):
         return self.target - cur_temp
     
     def update(self, u):
-        cur_freq = self.core.get_lim_freq()
+        cur_freq = self.cur_freq
         max_freq = self.core.get_max_freq()
         min_freq = self.core.get_min_freq()
         new_freq = max(min(cur_freq + u, max_freq), min_freq)
         self.core.set_lim_freq(new_freq)
         if self.core.n == 0:
-            INFO("Frequency {:.2f}->{:.2f}Ghz".format(cur_freq/1000000, new_freq/1000000))
+            INFO("Core {} Frequency {:.2f}->{:.2f}Ghz"
+                .format(self.core.n,
+                    cur_freq/1000000, new_freq/1000000))
     
     def regulate(self, cur_temp):
         undershoot = self.get_undershoot(cur_temp)
         if self.detect_throttle():
-            undershoot = -5 # force 5C too hot
+            self.i = -100.0
             if self.auto_target:
                 self.target -= 1 # reduce target by 1C
                 INFO("Temp target reduced to {}C".format(self.target))
         p = undershoot
         diff = undershoot - self.prev_undershoot
-        d = diff #/ self.interval # in degrees/second
-        self.i += undershoot #* self.interval # in degree.seconds
-        u = (p + self.i + d) * self.scale 
+        d = diff / self.interval # in degrees/second
+        self.i += undershoot * self.interval # in degree.seconds
+        u = (p * self.p_scale
+             + self.i * self.i_scale
+             + d * self.i_scale
+             )
         if self.core.n == 0:
             INFO("T={}/{} P={} I={} D={} U={:.0f}Mhz".format(cur_temp, self.target, p, self.i, d, u/1000))
         self.update(u)
@@ -731,7 +741,9 @@ class Thermo:
     
     def tick(self):
         cur_temp = self.get_max_temp()
-        INFO("Current temperature: {:.1f}".format(cur_temp))
+        #INFO("Current temperature: {:.1f}".format(cur_temp))
+        for core in self.topology.cores:
+            core.pid.read()
         for core in self.topology.cores:
             core.pid.regulate(cur_temp)
         
@@ -1159,7 +1171,7 @@ def main():
                         nargs='*',
                         )
     parser.add_argument("--interval", 
-                        type=int,
+                        type=float,
                         default=10,
                         help="set polling interval."
                         )
