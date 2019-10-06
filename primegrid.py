@@ -221,6 +221,16 @@ class Processor(Numbered):
         self.cur_freq_fn = self.directory + '/cpufreq/scaling_cur_freq'
         self.max_freq = self.get_max_freq()
         self.min_freq = self.get_min_freq()
+        self.ctc = None
+        self.ptc = None
+        self.ctc_fn = (self.directory
+            + '/thermal_throttle/core_throttle_count')
+        self.ptc_fn = (self.directory
+            + '/thermal_throttle/package_throttle_count')
+        if os.path.isfile(self.ctc_fn):
+            self.ctc = int(slurp(self.ctc_fn))
+        if os.path.isfile(self.ptc_fn):
+            self.ptc = int(slurp(self.ptc_fn))
     
     def siblings(self):
         assert self in self.core.processors
@@ -256,6 +266,41 @@ class Processor(Numbered):
 
     def get_cur_freq(self):
         return int(slurp(self.cur_freq_fn))
+    
+    def is_idle(self):
+        lines = slurp('/proc/stat').splitlines()
+        for line in lines:
+            if line.startswith('cpu' + str(self.n)):
+                fields = line.split()
+                fields = [int(f) for f in fields[1:]]
+                total = sum(fields)
+                idle = fields[3]
+                if idle/total > 0.75:
+                    return True
+                else:
+                    return False
+        ERROR("Couldn't determin if processor is idle...")
+    
+    def detect_throttle(self):
+        if self.ctc is not None:
+            new_ctc = int(slurp(self.ctc_fn))
+            if new_ctc > self.ctc:
+                self.ctc = new_ctc
+                return True
+        if self.ptc is not None:
+            new_ptc = int(slurp(self.ptc_fn))
+            if new_ptc > self.ptc:
+                self.ptc = new_ptc
+                return True
+        if self.ctc is None and self.ptc is None:
+            if not self.is_idle():
+                cur_freq = self.core.get_cur_freq()
+                lim_freq = self.core.get_lim_freq()
+                if cur_freq < lim_freq - 200000:
+                    INFO("Core {} frequency is {:.2f}. It's probably throttling."
+                            .format(self.core.n, cur_freq/1000000))
+                    return True
+            return False
 
 class Core:
     def __init__(self, n, topology):
@@ -292,6 +337,12 @@ class Core:
     def set_lim_freq(self, khz):
         for p in self.processors:
             p.set_lim_freq(khz)
+    
+    def detect_throttle(self):
+        for p in self.processors:
+            if p.detect_throttle():
+                return True
+        return False
 
 class Topology:
     """400-level maths"""
@@ -648,23 +699,16 @@ class PID:
             self.auto_target = False
             self.target = float(self.options.target_temp)
         self.interval = self.options.interval
-        self.i_time = 10.0
         self.i = 0.0
         self.prev_undershoot = 0.0
-        self.p_scale = 50000.0 # C / Khz
-        self.i_scale = 5000.0
-        self.d_scale = 100000.0
+        gain = options.gain * 1000.0 # C / Khz
+        self.p_scale = gain # C / Khz
+        self.i_scale = gain / options.i_time
+        self.d_scale = gain * options.d_time
         self.cur_freq = self.core.get_cur_freq()
         
     def detect_throttle(self):
-        if self.core.weight() >= 1.0:
-            cur_freq = self.core.get_cur_freq()
-            lim_freq = self.core.get_lim_freq()
-            if cur_freq < lim_freq - 200000:
-                INFO("Core {} frequency is {:.2f}. It's probably throttling."
-                        .format(self.core.n, cur_freq/1000000))
-                return True
-        return False
+        return self.core.detect_throttle()
     
     def read(self):
         self.cur_freq = self.core.get_cur_freq()
@@ -680,6 +724,10 @@ class PID:
         self.core.set_lim_freq(new_freq)
         if self.core.n == 0:
             INFO("Core {} Frequency {:.2f}->{:.2f}Ghz"
+                .format(self.core.n,
+                    cur_freq/1000000, new_freq/1000000))
+        else:
+            DEBUG("Core {} Frequency {:.2f}->{:.2f}Ghz"
                 .format(self.core.n,
                     cur_freq/1000000, new_freq/1000000))
     
@@ -698,11 +746,61 @@ class PID:
              + self.i * self.i_scale
              + d * self.i_scale
              )
-        if self.core.n == 0:
-            INFO("T={}/{} P={} I={} D={} U={:.0f}Mhz".format(cur_temp, self.target, p, self.i, d, u/1000))
+        if True or self.core.n == 0:
+            DEBUG("T={}/{} P={} I={} D={} U={:.0f}Mhz".format(cur_temp, self.target, p, self.i, d, u/1000))
         self.update(u)
         self.prev_undershoot = undershoot
+
+class SimpleRegulator:
+    def __init__(self, core, options):
+        self.core = core
+        self.options = options
+        if self.options.target_temp == 'max':
+            self.auto_target = True
+            self.target = 100.0
+        else:
+            self.auto_target = False
+            self.target = float(self.options.target_temp)
+        self.gain = options.gain * 1000.0 # C / Khz
+        self.max_freq = self.core.get_max_freq()
+        self.min_freq = self.core.get_min_freq()
+        self.lim = self.core.get_cur_freq()
+        
+    def detect_throttle(self):
+        return self.core.detect_throttle()
     
+    def read(self):
+        pass
+    
+    def get_undershoot(self, cur_temp):
+        return self.target - cur_temp
+    
+    def update(self, u):
+        cur_freq = self.lim
+        new_freq = max(min(cur_freq + u, self.max_freq), self.min_freq)
+        self.core.set_lim_freq(new_freq)
+        self.lim = new_freq
+        if self.core.n == 0:
+            INFO("Core {} Frequency {:.2f}->{:.2f}Ghz"
+                .format(self.core.n,
+                    cur_freq/1000000, new_freq/1000000))
+        else:
+            DEBUG("Core {} Frequency {:.2f}->{:.2f}Ghz"
+                .format(self.core.n,
+                    cur_freq/1000000, new_freq/1000000))
+    
+    def regulate(self, cur_temp):
+        undershoot = self.get_undershoot(cur_temp)
+        if self.detect_throttle():
+            if self.auto_target:
+                self.target -= 1 # reduce target by 1C
+                INFO("Temp target reduced to {}C".format(self.target))
+            self.update(-self.gain)
+            return
+        if undershoot < 0:
+            self.update(-self.gain)
+        elif undershoot > 0:
+            self.update(self.gain)
 
 class Thermo:
     def pick_sensor(self):
@@ -730,9 +828,13 @@ class Thermo:
         self.options = options
         self.topology = topology
         self.pick_sensor()
+        if options.pid:
+            regulator = PID
+        else:
+            regulator = SimpleRegulator
         if self.options.target_temp is not None:
             for core in self.topology.cores:
-                core.pid = PID(core, self.options)
+                core.pid = regulator(core, self.options)
         else:
             self.target = None
         
@@ -754,17 +856,28 @@ class Gridder:
         self.topology = Topology()
         self.schedule = Schedule(options)
         self.thermo = Thermo(options, self.topology)
+        self.always_big = self.options.interval >= 10.0
+        self.c = 0
     
     def watch(self):
         while True:
-            self.tick()
+            self.small_tick()
+            if self.always_big or self.c % 10 == 0:
+                self.big_tick()
             time.sleep(self.options.interval)
+            self.c += 1
             DEBUG("-------")
     
-    def tick(self):
+    def big_tick(self):
         self.schedule.get_new_jobs()
         self.schedule.distribute(self.topology.cores)
+    
+    def small_tick(self):
         self.thermo.tick()
+        
+    def tick(self):
+        self.small_tick()
+        self.big_tick()
         
     def run(self):
         if self.options.zero_latency:
@@ -1172,9 +1285,8 @@ def main():
                         )
     parser.add_argument("--interval", 
                         type=float,
-                        default=10,
-                        help="set polling interval."
-                        )
+                        default=10.0,
+                        help="set polling interval."                        )
     parser.add_argument("--zero-latency",
                         help="ask the kernel to provide zero latency. "
                         "Not recommended: this keeps the processors from idling which interferes with hyperthreading",
@@ -1221,9 +1333,27 @@ def main():
                         nargs='*')
     parser.add_argument("--target-temp",
                         help="Manage CPU temperature by restricting CPU Mhz. "
-                        "Specify a temperature in degrees C or 'max'",
+                        "Specify a temperature in °C or 'max'",
                         metavar="DEGREES_C",
                         default=None)
+    parser.add_argument("--pid",
+                        action='store_true',
+                        help="Use PID control loop for temperature regulation. Not recommended.")
+    parser.add_argument("--gain",
+                        type=float,
+                        metavar="MHZ",
+                        default=50.0,
+                        help="Proccessor speed step amount in MHz or Gain for PID loop in MHz / °C")
+    parser.add_argument("--i-time",
+                        type=float,
+                        metavar="S",
+                        default=10.0,
+                        help="Integral time for PID loop in seconds")
+    parser.add_argument("--d-time",
+                        type=float,
+                        metavar="S",
+                        default=2.0,
+                        help="Derivative time for PID loop in seconds")
     args = parser.parse_args()
     if args.debug:
         logging.basicConfig(stream=sys.stderr,level=logging.DEBUG)
@@ -1256,7 +1386,7 @@ The latest version is here: [url]https://github.com/hazelybell/scripts/blob/mast
 [size=18]Requirments[/size]
 
 [list]
-* Python 3.7
+* Python 3.7+
 * numpy
 * scipy
 * util-linux (with the taskset command)
@@ -1309,6 +1439,12 @@ Example: Consider a 4-core CPU with hyperthreading. For a task with 2 threads, '
 
 If you decide that you want to run primegrid with an affinity layout other than 'free' you can run the script with '--layout clump' or '--layout spread' as root. The script will watch for BOINC to start primegrid LLR tasks and manage their affinity using 'taskset'.
 
+[size=18]Managing CPU Temperature[/size]
+
+For some systems which thermal throttle, or are simply too loud, the script can manage the CPU temperature by specifying '--target-temp 95' or some other temperature in °C. The script will then change the maximum allowed CPU frequency until that temperature is met but not exceeded. Do not use this feature on overclocked systems.
+
+Thermal throttling can degrade performance when the CPU runs too fast, overheats, and then runs very slowly until it cools down, then repeats this process over and over again. It is more efficient to run the CPU at a more consistent, intermediate speed.
+
 [size=18]Advanced Options[/size]
 
 '--processors N' Benchmark only using N processors. This includes logical processors. For example on a 4-core processor with hyperthreading, setting '--processors 4' will only benchmark equivalent to setting 50% of CPUs in BOINC. This will reduce the number of different benchmarks run.
@@ -1329,10 +1465,11 @@ Even more options: See '--help' output, but be wary, these can have unfortunate 
 
 Systems with complicated topologies are not modelled by the script. That includes systems with multiple CPU sockets, NUMA, and Ryzen 3000-series CPUs. For thread counts strictly more than 2 with hyperthreading or more than 1 without hyperthreading the CPU affinity may be handled poorly. It is better to let the OS manage CPU affinity in these situations. For example, consider the Ryzen 3600X, a 6-core processor with hyperthreading. On this CPU, cores are organized into groups called CCXs, for which communication inside a single CCX is much faster than communication between cores in different CCXs. Thus plans like 4 threads x 3 tasks (100%) may have very poor performance if 'clump' or 'thread' is chosen. I plan supporting these systems better, eventually, if I can get my hands on one.
 
+The script may not have a good idea of the CPU temperature on some AMD systems.
+
 [size=18]Future features[/size]
 
 [list]
-* Manage CPU temperature (for systems which thermal throttle :x)
 * Model NUMA/multisocket/CCX CPU topologies
 * Manage C-states
 * Manage GPU driver affinity
