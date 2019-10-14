@@ -44,7 +44,7 @@ LLR_RE = re.compile('[\n\r\b]+')
 original_sigint_handler = signal.getsignal(signal.SIGINT)
 
 def call(*args, **kwargs):
-    #DEBUG(" ".join([a for arg in args for a in arg]))
+    DEBUG(" ".join([a for arg in args for a in arg]))
     subprocess.call(*args, **kwargs)
 
 def acse(*args, **kwargs):
@@ -142,7 +142,7 @@ class NSet:
     def difference(self, *others):
         return self.__class__(self.s.difference(*[o.s for o in others]))
     
-    def minimum(self, stagger=[0]):
+    def minimum(self):
         precision = 0.0001
         ub = 1+precision
         lb = 1-precision
@@ -156,9 +156,10 @@ class NSet:
             elif w > (minweight * lb) and (w < minweight * ub):
                 minprocs.append(i)
         minprocs = sorted(minprocs, key=lambda x: x.n)
-        i = stagger[0] % len(minprocs)
-        stagger[0] = stagger[0] // len(minprocs)
-        return minprocs[i]
+        return minprocs[0]
+    
+    def sorted(self):
+        return sorted(self.s, key=lambda x: x.n)
     
     def __iter__(self):
         return self.s.__iter__()
@@ -190,6 +191,32 @@ class ProcessorSet(NSet):
     def as_string(self):
         return ','.join(map(str, new.d.keys()))
 
+    def get_cur_freq(self):
+        fs = [p.get_cur_freq() for p in self.s]
+        return sum(fs)//len(fs)
+
+    def get_min_freq(self):
+        fs = [p.get_min_freq() for p in self.s]
+        return max(fs)
+
+    def get_max_freq(self):
+        fs = [p.get_max_freq() for p in self.s]
+        return min(fs)
+
+    def get_lim_freq(self):
+        fs = [p.get_lim_freq() for p in self.s]
+        return min(fs)
+    
+    def set_lim_freq(self, khz):
+        for p in self.s:
+            p.set_lim_freq(khz)
+    
+    def detect_throttle(self):
+        for p in self.s:
+            if p.detect_throttle():
+                return True
+        return False
+
 class CoreSet(NSet):
     def processors(self):
         ps = ProcessorSet()
@@ -197,9 +224,31 @@ class CoreSet(NSet):
                 c.processors for c in self.s
             ])
     
-    def minimum_core_processor(self, stagger=[0]):
+    def packages(self):
+        return PackageSet({
+            c.pkg for p in self.s
+            })
+    
+    def minimum_core_processor(self):
         """ Return the freest processor on the freest core """
-        return self.minimum(stagger).processors.minimum(stagger)
+        return self.minimum().processors.minimum()
+
+class PackageSet(NSet):
+    def processors(self):
+        ps = ProcessorSet()
+        return ps.union(*[
+                pkg.processors for pkg in self.s
+            ])
+
+    def cores(self):
+        cs = CoreSet()
+        return cs.union(*[
+                pkg.cores for pkg in self.s
+            ])
+
+    def recursive_minimum(self):
+        """ Return the freest processor on the freest core on the freest processor """
+        return self.minimum().cores.minimum_core_processor()
 
 class Numbered:
     def __init__(self, n):
@@ -209,12 +258,22 @@ class Numbered:
         return hash((self.__class__, self.n))
 
 class Processor(Numbered):
-    def __init__(self, n, core, topology):
-        super().__init__(n)
-        self.topology = topology
-        self.core = core
-        self.threads = dict()
-        self.directory = self.topology.base + "/cpu" + str(self.n)
+    def init_topology(self):
+        self.topology.processors.add(self)
+        self.core_n = int(slurp(self.directory,"topology/core_id"))
+        if not self.core_n in self.topology.cores:
+            Core(self.core_n, self.topology)
+        self.core = self.topology.cores[self.core_n]
+        self.core.processors.add(self)
+        self.pkg_n = int(slurp(self.directory,
+                               "topology/physical_package_id"))
+        if not self.pkg_n in self.topology.pkgs:
+            Package(self.pkg_n, self.topology)
+        self.pkg = self.topology.pkgs[self.pkg_n]
+        self.pkg.processors.add(self)
+        self.core.bind_package(self.pkg)
+    
+    def init_regulator(self):
         self.max_freq_fn = self.directory + '/cpufreq/cpuinfo_max_freq'
         self.min_freq_fn = self.directory + '/cpufreq/cpuinfo_min_freq'
         self.lim_freq_fn = self.directory + '/cpufreq/scaling_max_freq'
@@ -231,6 +290,14 @@ class Processor(Numbered):
             self.ctc = int(slurp(self.ctc_fn))
         if os.path.isfile(self.ptc_fn):
             self.ptc = int(slurp(self.ptc_fn))
+    
+    def __init__(self, n, topology):
+        super().__init__(n)
+        self.topology = topology
+        self.threads = dict()
+        self.directory = self.topology.base + "/cpu" + str(self.n)
+        self.init_topology()
+        self.init_regulator()
     
     def siblings(self):
         assert self in self.core.processors
@@ -302,47 +369,38 @@ class Processor(Numbered):
                     return True
             return False
 
-class Core:
+class Core(Numbered):
     def __init__(self, n, topology):
-        self.n = n
-        super().__init__()
+        super().__init__(n)
         self.processors = ProcessorSet()
         self.topology = topology
+        self.topology.cores.add(self)
+        self.pkg = None
     
-    def add_processor(self, processor):
-        self.processors.add(processor)
+    def bind_package(self, pkg):
+        if self.pkg is None:
+            self.pkg = pkg
+            self.pkg.cores.add(self)
+        else:
+            assert pkg is self.pkg
+            assert self.n in self.pkg.cores
     
     def weight(self):
         return self.processors.weight()
 
     def get_freeest_processor(self):
         return self.processors.minimum()
-    
-    def get_cur_freq(self):
-        fs = [p.get_cur_freq() for p in self.processors]
-        return sum(fs)//len(fs)
 
-    def get_min_freq(self):
-        fs = [p.get_min_freq() for p in self.processors]
-        return max(fs)
+class Package(Numbered):
+    def __init__(self, n, topology):
+        super().__init__(n)
+        self.processors = ProcessorSet()
+        self.cores = CoreSet()
+        self.topology = topology
+        self.topology.pkgs.add(self)
 
-    def get_max_freq(self):
-        fs = [p.get_max_freq() for p in self.processors]
-        return min(fs)
-
-    def get_lim_freq(self):
-        fs = [p.get_lim_freq() for p in self.processors]
-        return min(fs)
-    
-    def set_lim_freq(self, khz):
-        for p in self.processors:
-            p.set_lim_freq(khz)
-    
-    def detect_throttle(self):
-        for p in self.processors:
-            if p.detect_throttle():
-                return True
-        return False
+    def weight(self):
+        return self.processors.weight()
 
 class Topology:
     """400-level maths"""
@@ -350,6 +408,9 @@ class Topology:
     base = "/sys/devices/system/cpu"
 
     def __init__(self):
+        self.cores = CoreSet()
+        self.processors = ProcessorSet()
+        self.pkgs = PackageSet()
         self.read_topology()
         
     def read_each(self, f):
@@ -359,39 +420,28 @@ class Topology:
                 f(m)
 
     def read_topology(self):
-        self.cores = CoreSet()
-        self.processors = ProcessorSet()
-        self.processors_by_number = dict()
-        self.cores_by_number = dict()
-        
         def processor(i):
             processor_n = int(i[1])
-            core_n = int(slurp(self.base,i[0],"topology/core_id"))
-            self.add_processor(processor_n, core_n)
+            Processor(processor_n, self)
         self.read_each(processor)
         
         def siblings(i):
             processor_siblings = slurp(self.base,i[0],"topology/thread_siblings_list")
             #TODO: make sure this checks out
         self.read_each(siblings)
-    
-    def add_core(self, n):
-        assert not n in self.cores_by_number
-        core = Core(n, self)
-        self.cores.add(core)
-    
-    def add_processor(self, n, core_n):
-        assert not n in self.processors_by_number
-        if not core_n in self.cores:
-            self.add_core(core_n)
-        core = self.cores[core_n]
-        processor = Processor(n, core, self)
-        self.processors.add(processor)
-        core.add_processor(processor)
-        self.processors_by_number[n] = processor
+        
+        for pkg in self.pkgs.sorted():
+            INFO("Package {}:".format(pkg.n))
+            for core in pkg.cores.sorted():
+                INFO("    Core {}:".format(core.n))
+                assert pkg is core.pkg
+                for p in core.processors.sorted():
+                    INFO("        Processor {}:".format(p.n))
+                    assert pkg is p.pkg
+                    assert core is p.core
     
     def get_freeest_processor(self):
-        return self.cores.minimum_core_processor()
+        return self.pkgs.recursive_minimum()
     
 class GPU:
     irqs = "/proc/irq"
@@ -466,6 +516,7 @@ class Job:
     def __init__(self, pid, schedule):
         self.pid = pid
         self.schedule = schedule
+        self.topology = schedule.topology
         self.state = 'new'
         self.threads = self.get_threads()
     
@@ -504,10 +555,14 @@ class GPUJob(Job):
         if self.schedule.options.realtime_gpu:
             call(['chrt', '-a', '-f', '-p', '1', str(self.pid)])
     
-    def assign_whole_process(self, cores, stagger):
-        p = cores.minimum_core_processor(stagger)
-        ahs = self.schedule.options.allow_hyperthread_swapping
-        self.assign(p, ahs)
+    def assign_whole_process(self):
+        if len(self.topology.pkgs) == 1:
+            self.pkg = self.topology.pkgs.minimum()
+            p = self.pkg.cores.minimum_core_processor()
+            ahs = self.schedule.options.allow_hyperthread_swapping
+            self.assign(p, ahs)
+        else: # TODO: make this work in the SMP case
+            self.processors = set()
     
     distribute = assign_whole_process
     
@@ -519,17 +574,19 @@ class GPUJob(Job):
 class CPUJob(Job):
     kind = 'cpu'
     
-    def spread_process_threads(self, cores, stagger):
+    def spread_process_threads(self):
+        self.pkg = self.topology.pkgs.minimum()
         ahs = self.schedule.options.allow_hyperthread_swapping
         for t in self.threads:
-            p = cores.minimum_core_processor(stagger)
+            p = self.pkg.cores.minimum_core_processor()
             t.assign(p, ahs)
     
-    def clump_process_threads(self, cores, stagger):
+    def clump_process_threads(self):
+        self.pkg = self.topology.pkgs.minimum()
         ahs = self.schedule.options.allow_hyperthread_swapping
         i = 0
         while i < len(self.threads):
-            p = cores.minimum_core_processor(stagger)
+            p = self.pkg.cores.minimum_core_processor()
             sibs = list(p.core.processors)
             j = 0
             while j < len(sibs) and i < len(self.threads):
@@ -538,18 +595,18 @@ class CPUJob(Job):
                 j = j + 1
                 i = i + 1
     
-    def free_process_threads(self, cores, stagger):
+    def free_process_threads(self):
         for t in self.threads:
-            t.assign_free(cores.processors())
+            t.assign_free(self.topology.processors)
     
-    def distribute_process_threads(self, cores, stagger):
+    def distribute_process_threads(self):
         layout = self.schedule.options.layout
         if layout == 'spread':
-            self.spread_process_threads(cores, stagger)
+            self.spread_process_threads()
         elif layout == 'clump':
-            self.clump_process_threads(cores, stagger)
+            self.clump_process_threads()
         elif layout == 'free':
-            self.free_process_threads(cores, stagger)
+            self.free_process_threads()
         else:
             raise NotImplementedError("Bad layout name: " + layout)
     
@@ -569,12 +626,13 @@ def matches_one_of(what, res):
 class Schedule:
     digits = re.compile(r'\d+$')
     
-    def __init__(self, options):
+    def __init__(self, options, topology):
         self.jobs = set()
         self.alive = set()
         self.dead = set()
         self.new = set()
         self.options = options
+        self.topology = topology
     
     @property
     def cpu_jobs(self):
@@ -620,17 +678,14 @@ class Schedule:
         self.jobs = self.alive.union(new)
         self.new = new
     
-    def distribute(self, cores):
-        stagger = 0
-        
+    def distribute(self):
         for j in self.dead:
             j.undistribute()
         
         self.dead = set()
         
         for j in self.new:
-            j.distribute(cores, [stagger])
-            stagger = stagger + 1
+            j.distribute()
         
         self.alive = self.jobs
         self.new = set()
@@ -689,8 +744,8 @@ class Sensors:
         return max(temps)
 
 class PID:
-    def __init__(self, core, options):
-        self.core = core
+    def __init__(self, unit, options):
+        self.unit = unit
         self.options = options
         if self.options.target_temp == 'max':
             self.auto_target = True
@@ -705,31 +760,26 @@ class PID:
         self.p_scale = gain # C / Khz
         self.i_scale = gain / options.i_time
         self.d_scale = gain * options.d_time
-        self.cur_freq = self.core.get_cur_freq()
+        self.cur_freq = self.unit.processors.get_cur_freq()
         
     def detect_throttle(self):
-        return self.core.detect_throttle()
+        return self.unit.processors.detect_throttle()
     
     def read(self):
-        self.cur_freq = self.core.get_cur_freq()
+        self.cur_freq = self.unit.processors.get_cur_freq()
     
     def get_undershoot(self, cur_temp):
         return self.target - cur_temp
     
     def update(self, u):
         cur_freq = self.cur_freq
-        max_freq = self.core.get_max_freq()
-        min_freq = self.core.get_min_freq()
+        max_freq = self.unit.processors.get_max_freq()
+        min_freq = self.unit.processors.get_min_freq()
         new_freq = max(min(cur_freq + u, max_freq), min_freq)
-        self.core.set_lim_freq(new_freq)
-        if self.core.n == 0:
-            INFO("Core {} Frequency {:.2f}->{:.2f}Ghz"
-                .format(self.core.n,
-                    cur_freq/1000000, new_freq/1000000))
-        else:
-            DEBUG("Core {} Frequency {:.2f}->{:.2f}Ghz"
-                .format(self.core.n,
-                    cur_freq/1000000, new_freq/1000000))
+        self.unit.processors.set_lim_freq(new_freq)
+        INFO("Unit {} Frequency {:.2f}->{:.2f}Ghz"
+            .format(self.unit.n,
+                cur_freq/1000000, new_freq/1000000))
     
     def regulate(self, cur_temp):
         undershoot = self.get_undershoot(cur_temp)
@@ -746,14 +796,13 @@ class PID:
              + self.i * self.i_scale
              + d * self.i_scale
              )
-        if True or self.core.n == 0:
-            DEBUG("T={}/{} P={} I={} D={} U={:.0f}Mhz".format(cur_temp, self.target, p, self.i, d, u/1000))
+        DEBUG("T={}/{} P={} I={} D={} U={:.0f}Mhz".format(cur_temp, self.target, p, self.i, d, u/1000))
         self.update(u)
         self.prev_undershoot = undershoot
 
 class SimpleRegulator:
-    def __init__(self, core, options):
-        self.core = core
+    def __init__(self, unit, options):
+        self.unit = unit
         self.options = options
         if self.options.target_temp == 'max':
             self.auto_target = True
@@ -762,12 +811,12 @@ class SimpleRegulator:
             self.auto_target = False
             self.target = float(self.options.target_temp)
         self.gain = options.gain * 1000.0 # C / Khz
-        self.max_freq = self.core.get_max_freq()
-        self.min_freq = self.core.get_min_freq()
-        self.lim = self.core.get_cur_freq()
+        self.max_freq = self.unit.processors.get_max_freq()
+        self.min_freq = self.unit.processors.get_min_freq()
+        self.lim = self.unit.processors.get_cur_freq()
         
     def detect_throttle(self):
-        return self.core.detect_throttle()
+        return self.unit.processors.detect_throttle()
     
     def read(self):
         pass
@@ -778,16 +827,11 @@ class SimpleRegulator:
     def update(self, u):
         cur_freq = self.lim
         new_freq = max(min(cur_freq + u, self.max_freq), self.min_freq)
-        self.core.set_lim_freq(new_freq)
+        self.unit.processors.set_lim_freq(new_freq)
         self.lim = new_freq
-        if self.core.n == 0:
-            INFO("Core {} Frequency {:.2f}->{:.2f}Ghz"
-                .format(self.core.n,
-                    cur_freq/1000000, new_freq/1000000))
-        else:
-            DEBUG("Core {} Frequency {:.2f}->{:.2f}Ghz"
-                .format(self.core.n,
-                    cur_freq/1000000, new_freq/1000000))
+        INFO("Unit {} Frequency {:.2f}->{:.2f}Ghz"
+            .format(self.unit.n,
+                cur_freq/1000000, new_freq/1000000))
     
     def regulate(self, cur_temp):
         undershoot = self.get_undershoot(cur_temp)
@@ -833,8 +877,8 @@ class Thermo:
         else:
             regulator = SimpleRegulator
         if self.options.target_temp is not None:
-            for core in self.topology.cores:
-                core.pid = regulator(core, self.options)
+            for pkg in self.topology.pkgs:
+                pkg.pid = regulator(pkg, self.options)
         else:
             self.target = None
         
@@ -846,17 +890,17 @@ class Thermo:
             return
         cur_temp = self.get_max_temp()
         #INFO("Current temperature: {:.1f}".format(cur_temp))
-        for core in self.topology.cores:
-            core.pid.read()
-        for core in self.topology.cores:
-            core.pid.regulate(cur_temp)
+        for pkg in self.topology.pkgs:
+            pkg.pid.read()
+        for pkg in self.topology.pkgs:
+            pkg.pid.regulate(cur_temp)
         
         
 class Gridder:
     def __init__(self, options):
         self.options = options
         self.topology = Topology()
-        self.schedule = Schedule(options)
+        self.schedule = Schedule(options, self.topology)
         self.thermo = Thermo(options, self.topology)
         self.always_big = self.options.interval >= 10.0
         self.c = 0
@@ -872,7 +916,7 @@ class Gridder:
     
     def big_tick(self):
         self.schedule.get_new_jobs()
-        self.schedule.distribute(self.topology.cores)
+        self.schedule.distribute()
     
     def small_tick(self):
         self.thermo.tick()
