@@ -842,6 +842,8 @@ class Thermo:
         return self.sensor.get_max_temp()
     
     def tick(self):
+        if self.options.target_temp is None:
+            return
         cur_temp = self.get_max_temp()
         #INFO("Current temperature: {:.1f}".format(cur_temp))
         for core in self.topology.cores:
