@@ -1207,7 +1207,7 @@ class LlrMarker:
     
     def add_threads(self, processors, force_threads=None, no_aff=False):
         if force_threads is not None:
-            threads = [1]
+            threads = [force_threads]
         elif len(self.options.threads) > 0:
             threads = self.options.threads
         else:

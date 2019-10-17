@@ -8,7 +8,7 @@ CurrentPalette=Forty Colors
 DefaultProfile=Shell.profile
 
 [Favorite Profiles]
-Favorites=Shell.profile,Big.profile,Bigger.profile
+Favorites=Big.profile,Shell.profile,Bigger.profile
 
 [KonsoleWindow]
 SaveGeometryOnExit=false
