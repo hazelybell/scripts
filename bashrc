@@ -95,6 +95,10 @@ function sendkey () {
 
 function copy () { rsync -aP "$@"; }
 
+function cargol {
+    cargo --color always "$@" |& less -r
+}
+
 # COMMANDS ONLY FOR TELETYPES ------------------------------------------------
 
 # Check if stdout/stderr is a teletype

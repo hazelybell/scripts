@@ -36,10 +36,15 @@ gputasks = [
     re.compile(r'cudaPPSsieve'),
     re.compile(r'primegrid_genefer'),
     ]
+selftasks = [
+    re.compile(re.escape('primegrid.py')),
+    re.compile(re.escape(sys.argv[0]))
+    ]
 
 PROC = "/proc"
 
 LLR_RE = re.compile('[\n\r\b]+')
+DIGITS = re.compile(r'\d+$')
 
 original_sigint_handler = signal.getsignal(signal.SIGINT)
 
@@ -62,15 +67,25 @@ def slurp_output(*args, **kwargs):
 def dump(thing):
     DEBUG(json.dumps(thing, indent=2, sort_keys=True))
     
-def is_cputask(cmdline):
-    for e in cputasks:
-        if re.search(e, cmdline[0]) is not None:
-            return True
-        
-def is_gputask(cmdline):
-    for e in gputasks:
-        if re.search(e, cmdline[0]) is not None:
-            return True
+def is_self(pid, cmdline):
+    #DEBUG(str(pid) + " " + str(len(cmdline)) + ": " + cmdline)
+    for e in selftasks:
+        if e.search(cmdline) is not None and pid != os.getpid():
+            ERROR("Another copy of this script is running on PID " + str(pid))
+            sys.exit(1)
+
+def ps_aux(f):
+    for i in os.listdir(PROC):
+        m = DIGITS.match(i)
+        if m is not None:
+            pid = int(i)
+            try:
+                cmd = " ".join((slurp(PROC, i, 'cmdline').split('\0')))
+            except IOError as e:
+                continue
+            if len(cmd) == 0:
+                continue
+            f(pid, cmd)
 
 def argmin(d):
     return min(d, key=d.get)
@@ -624,8 +639,6 @@ def matches_one_of(what, res):
     return False
 
 class Schedule:
-    digits = re.compile(r'\d+$')
-    
     def __init__(self, options, topology):
         self.jobs = set()
         self.alive = set()
@@ -652,27 +665,24 @@ class Schedule:
         known = self.jobs_by_pid
         alive = dict()
         new = set()
+
         def maybe_new_job(pid, kind):
             if pid in known:
                 alive[pid] = known[pid]
             else:
-                #DEBUG("NEW %s PROC: %d" % (kind.__name__, pid))
+                DEBUG("NEW %s PROC: %d" % (kind.__name__, pid))
                 new.add(kind(pid, self))
         
-        for i in os.listdir(PROC):
-            m = self.digits.match(i)
-            if m is not None:
-                pid = int(i)
-                try:
-                    cmd = (slurp(PROC, i, 'cmdline').split('\0'))[0]
-                except IOError as e:
-                    continue
-                if matches_one_of(cmd, gputasks):
-                    maybe_new_job(pid, GPUJob)
-                elif matches_one_of(cmd, cputasks):
-                    maybe_new_job(pid, CPUJob)
-                else:
-                    pass
+        def cpu_gpu_scan(pid, cmd):
+            if matches_one_of(cmd, gputasks):
+                maybe_new_job(pid, GPUJob)
+            elif matches_one_of(cmd, cputasks):
+                maybe_new_job(pid, CPUJob)
+            else:
+                pass
+        
+        ps_aux(cpu_gpu_scan)
+        
         self.alive = set(alive.values())
         self.dead = self.jobs.difference(self.alive)
         self.jobs = self.alive.union(new)
@@ -1316,7 +1326,8 @@ class LlrMarker:
         while not done:
             self.run1()
             done = self.results_ok()
-        for test in self.tests:
+        asc = sorted(self.tests, key=lambda test: test.mean)
+        for test in asc:
             print(test.summary())
 
 def main():
@@ -1400,11 +1411,16 @@ def main():
                         metavar="S",
                         default=2.0,
                         help="Derivative time for PID loop in seconds")
+    parser.add_argument("--multiple",
+                        action='store_true',
+                        help="Allow multiple copies of this script to run at the same time.")
     args = parser.parse_args()
     if args.debug:
         logging.basicConfig(stream=sys.stderr,level=logging.DEBUG)
     else:
         logging.basicConfig(stream=sys.stderr,level=logging.INFO)
+    if not args.multiple:
+        ps_aux(is_self)
     args.allow_hyperthread_swapping = not args.disallow_hyperthread_swapping
     gridder = Gridder(args)
     if args.benchmark_llr:
