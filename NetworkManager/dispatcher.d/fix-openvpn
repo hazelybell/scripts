@@ -1,0 +1,61 @@
+#!/bin/bash
+
+CONFLICTING_ROUTE="192.168.1.0/24"
+# First choice
+FIRST="dev enp\|dev eth"
+# Last choice
+LAST="dev tun"
+
+METRIC_SHORT=99 # Metric to use for the first choice
+METRIC_MED=599 # Metric to use for the other choices
+METRIC_LONG=999 # Metric to use for last choice
+
+IP="/sbin/ip"
+GREP="/bin/grep"
+
+shopt -s nocasematch
+
+debug() {
+	if [[ -n "$DEBUG" ]]
+	then echo "..." "$@"
+	fi
+}
+
+replace() {
+	"$IP" route del $1 \
+	&& "$IP" route add $2
+}
+metric_one() {
+	METRIC="$1"
+	LINE="$2"
+	if [[ "$LINE" =~ metric\ ([[:digit:]]+) ]]
+	then debug "Already has metric: ${BASH_REMATCH[1]}"
+		if (( BASH_REMATCH[1] == METRIC ))
+		then debug "Metric already correct"
+		else	NEW_LINE="${LINE/metric */metric ${METRIC}}"
+			replace "${LINE}" "${NEW_LINE}"
+		fi
+	else debug "Has no metric."
+	replace "${LINE}" "${LINE} metric ${METRIC}"
+	fi
+}
+
+metric_all() {
+	METRIC="$1"
+	while IFS="\n" read -r LINE
+	do	debug "$1: " "$LINE"
+		metric_one "$1" "$LINE"
+	done
+}
+
+get_routes() {
+	"$IP" -o route show to root "$CONFLICTING_ROUTE" \
+		| "$GREP" -s "$@"
+}
+
+OTHER="${PREFERRED}\|${TUNNEL}"
+
+get_routes "$FIRST" | metric_all "$METRIC_SHORT"
+get_routes -v "$OTHER" | metric_all "$METRIC_MED"
+get_routes "$LAST" | metric_all "$METRIC_LONG"
+
