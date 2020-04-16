@@ -29,7 +29,8 @@ CRITICAL = logger.critical
 
 cputasks = [
     re.compile(r'^primegrid_llr'),
-    re.compile(r'setiathome')
+    re.compile(r'setiathome'),
+    re.compile(r'rosetta_')
     ]
 
 gputasks = [
@@ -227,10 +228,11 @@ class ProcessorSet(NSet):
             p.set_lim_freq(khz)
     
     def detect_throttle(self):
+        throttled = False
         for p in self.s:
             if p.detect_throttle():
-                return True
-        return False
+                throttled = True
+        return throttled
 
 class CoreSet(NSet):
     def processors(self):
@@ -340,11 +342,14 @@ class Processor(Numbered):
         return int(slurp(self.lim_freq_fn))
     
     def set_lim_freq(self, khz):
+        khzstr = str(int(khz))
         with open(self.lim_freq_fn, 'w') as limit:
-            limit.write(str(khz))
+            limit.write(khzstr)
             limit.flush()
-        if (self.get_lim_freq() != khz):
-            ERROR("Couldn't set frequency limit to " + str(khz))
+        time.sleep(0.01)
+        got = self.get_lim_freq()
+        if (got != int(khzstr)):
+            ERROR(f"Couldn't set frequency limit to {khzstr}, got {got}")
 
     def get_cur_freq(self):
         return int(slurp(self.cur_freq_fn))
@@ -364,16 +369,19 @@ class Processor(Numbered):
         ERROR("Couldn't determin if processor is idle...")
     
     def detect_throttle(self):
+        throttled = False
         if self.ctc is not None:
             new_ctc = int(slurp(self.ctc_fn))
             if new_ctc > self.ctc:
                 self.ctc = new_ctc
-                return True
+                DEBUG(f"Processor {self.n} core throttle count increased!")
+                throttled = True
         if self.ptc is not None:
             new_ptc = int(slurp(self.ptc_fn))
             if new_ptc > self.ptc:
                 self.ptc = new_ptc
-                return True
+                DEBUG(f"Processor {self.n} package throttle count increased!")
+                throttled = True
         if self.ctc is None and self.ptc is None:
             if not self.is_idle():
                 cur_freq = self.core.get_cur_freq()
@@ -381,8 +389,8 @@ class Processor(Numbered):
                 if cur_freq < lim_freq - 200000:
                     INFO("Core {} frequency is {:.2f}. It's probably throttling."
                             .format(self.core.n, cur_freq/1000000))
-                    return True
-            return False
+                    throttled = True
+        return throttled
 
 class Core(Numbered):
     def __init__(self, n, topology):
@@ -846,14 +854,21 @@ class SimpleRegulator:
     def regulate(self, cur_temp):
         undershoot = self.get_undershoot(cur_temp)
         if self.detect_throttle():
+            DEBUG("CPU Throttling detected.")
             if self.auto_target:
                 self.target -= 1 # reduce target by 1C
                 INFO("Temp target reduced to {}C".format(self.target))
             self.update(-self.gain)
             return
         if undershoot < 0:
+            DEBUG(f"Unit {self.unit.n} Undershoot: {undershoot} "
+                  f"Over target temp, reducing frequency."
+                  )
             self.update(-self.gain)
         elif undershoot > 0:
+            DEBUG(f"Unit {self.unit.n} Undershoot: {undershoot} "
+                  f"Under target temp, increasing frequency."
+                  )
             self.update(self.gain)
 
 class Thermo:
